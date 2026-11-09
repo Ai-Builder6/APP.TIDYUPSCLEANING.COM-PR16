@@ -113,9 +113,9 @@ export const QuickLinksModal: React.FC<QuickLinksModalProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           owner: 'Ai-Builder6',
-          repo: opts?.prNumber ? `APP.TIDYUPSCLEANING.COM-START-PR${opts.prNumber}` : 'APP.TIDYUPSCLEANING.COM-START-PR6',
+          repo: opts?.prNumber ? `APP.TIDYUPSCLEANING.COM-PR${opts.prNumber}` : 'APP.TIDYUPSCLEANING.COM-PR16',
           createNewCopy: Boolean(opts?.createNewCopy),
-          prNumber: opts?.prNumber,
+          prNumber: opts?.prNumber || 16,
         }),
       });
       const data = await res.json();
@@ -483,7 +483,7 @@ export const QuickLinksModal: React.FC<QuickLinksModalProps> = ({
                     {isPushingGithub ? 'Syncing GitHub...' : 'GitHub Sync (1-Click)'}
                   </h5>
                   <p className="text-[10px] text-emerald-300 font-mono font-bold truncate">
-                    Push Copy to PR6
+                    Push Copy to PR16
                   </p>
                 </div>
               </button>
@@ -527,7 +527,7 @@ export const QuickLinksModal: React.FC<QuickLinksModalProps> = ({
                       GitHub Repos &amp; Drive Backup Manager
                     </h5>
                     <p className="text-[10px] text-emerald-700 font-semibold truncate">
-                      Ai-Builder6/APP.TIDYUPSCLEANING.COM-START-PR6 • Choose PR6–PR11
+                      Ai-Builder6/APP.TIDYUPSCLEANING.COM-PR16 • Choose PR6–PR16
                     </p>
                   </div>
                   <ChevronRight className="w-4 h-4 text-emerald-500 shrink-0" />

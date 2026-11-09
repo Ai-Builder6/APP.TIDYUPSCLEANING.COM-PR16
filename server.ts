@@ -8698,15 +8698,136 @@ app.get(
 // ─────────────────────────────────────────────────────────────────────────────
 // Cloud SQL PostgreSQL Database Endpoints & Synchronized Storage
 // ─────────────────────────────────────────────────────────────────────────────
-// Cloud SQL health check & status
+// Cloud SQL health check & automatic store synchronization
+async function syncStoreToCloudSqlIfNeeded() {
+  if (!db) return { usersCount: 0, cleanersCount: 0, ticketsCount: 0, jobberConfigsCount: 0 };
+  const store = loadStore();
+  // 1. Sync users from data/tidyups_auth_users.json
+  try {
+    const authUsersPath = path.join(process.cwd(), "data", "tidyups_auth_users.json");
+    if (fs.existsSync(authUsersPath)) {
+      const rawUsers = JSON.parse(fs.readFileSync(authUsersPath, "utf-8"));
+      if (Array.isArray(rawUsers)) {
+        for (const u of rawUsers) {
+          if (!u || !u.id) continue;
+          await db
+            .insert(dbSchema.users)
+            .values({
+              uid: String(u.id),
+              email: String(u.email || `${u.id}@tidyupscleaning.com`),
+              displayName: String(u.name || u.title || "TidyUps Staff"),
+              role: String(u.role || "dispatcher").toLowerCase(),
+            })
+            .onConflictDoNothing();
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("Cloud SQL users sync note:", (e as any)?.message);
+  }
+
+  // 2. Sync cleaners from store.staffRoster
+  try {
+    const roster = Array.isArray(store?.staffRoster) ? store!.staffRoster : [];
+    for (let i = 0; i < roster.length; i++) {
+      const c = roster[i];
+      if (!c) continue;
+      const cid = String(c.id || `cleaner-${i + 1}`);
+      await db
+        .insert(dbSchema.cleaners)
+        .values({
+          id: cid,
+          name: String(c.name || `Cleaner ${i + 1}`),
+          vanNumber: String(c.assignedVan || c.vanNumber || `Van ${i + 1}`),
+          phone: String(c.phone || "(780) 555-0100"),
+          email: String(c.email || `${cid}@tidyupscleaning.com`),
+          role: String(c.role || "Cleaner"),
+          homeAddress: String(c.homeAddress || "Edmonton, AB"),
+          color: String(c.color || "#10b981"),
+          status: String(c.status || "AVAILABLE"),
+          rating: Number(c.rating || 5.0),
+          skills: Array.isArray(c.skills) ? c.skills : ["Residential Cleaning", "Deep Cleaning"],
+          certifications: Array.isArray(c.certifications) ? c.certifications : ["Verified Staff"],
+          experienceYears: Number(c.experienceYears || 3),
+          currentLocation: c.currentLocation || { lat: 53.5461, lng: -113.4938, address: "Edmonton, AB" },
+          depotLocation: c.depotLocation || { lat: 53.5461, lng: -113.4938, address: "Edmonton, AB" },
+          shiftCapacityHours: Number(c.shiftCapacityHours || 8),
+          completedJobsCount: Number(c.completedJobsCount || 0),
+        })
+        .onConflictDoNothing();
+    }
+  } catch (e) {
+    console.warn("Cloud SQL cleaners sync note:", (e as any)?.message);
+  }
+
+  // 3. Sync tickets from store.tickets
+  try {
+    const tickets = Array.isArray(store?.tickets) ? store!.tickets : [];
+    const existingCleaners = await db.select({ id: dbSchema.cleaners.id }).from(dbSchema.cleaners);
+    const validCleanerIds = new Set(existingCleaners.map((x: any) => String(x.id)));
+    for (let i = 0; i < tickets.length; i++) {
+      const t = tickets[i];
+      if (!t || !t.id) continue;
+      const assignedId =
+        t.assignedTechId && validCleanerIds.has(String(t.assignedTechId))
+          ? String(t.assignedTechId)
+          : null;
+      await db
+        .insert(dbSchema.tickets)
+        .values({
+          id: String(t.id),
+          ticketNumber: String(t.ticketNumber || `TKT-${1000 + i}`),
+          customerName: String(t.customerName || "Customer"),
+          customerPhone: String(t.customerPhone || "(780) 555-0199"),
+          customerEmail: String(t.customerEmail || ""),
+          urgency: String(t.urgency || "NORMAL"),
+          equipmentType: String(t.equipmentType || "Residential Cleaning"),
+          equipmentModel: String(t.equipmentModel || "3 Bed / 2 Bath"),
+          faultCode: t.faultCode ? String(t.faultCode) : null,
+          issueDescription: String(t.issueDescription || "Scheduled Cleaning Service"),
+          accessNotes: t.accessNotes ? String(t.accessNotes) : null,
+          assignedTechId: assignedId,
+          status: String(t.status || "UNASSIGNED"),
+          stopSequence: Number(t.stopSequence || 0),
+          estimatedDurationMinutes: Number(t.estimatedDurationMinutes || 180),
+          location: t.location || { lat: 53.5461, lng: -113.4938, address: "Edmonton, AB" },
+          slaDeadline: String(t.slaDeadline || new Date().toISOString()),
+          reportedAt: String(t.reportedAt || new Date().toISOString()),
+          partsRequired: Array.isArray(t.partsRequired) ? t.partsRequired : [],
+          totalAmount: Number(t.totalAmount || 191.25),
+          syncedToJobber: Boolean(t.syncedToJobber),
+        })
+        .onConflictDoNothing();
+    }
+  } catch (e) {
+    console.warn("Cloud SQL tickets sync note:", (e as any)?.message);
+  }
+
+  const [uRows, cRows, tRows, jRows] = await Promise.all([
+    db.select({ id: dbSchema.users.id }).from(dbSchema.users),
+    db.select({ id: dbSchema.cleaners.id }).from(dbSchema.cleaners),
+    db.select({ id: dbSchema.tickets.id }).from(dbSchema.tickets),
+    db.select({ id: dbSchema.jobberConfigs.id }).from(dbSchema.jobberConfigs),
+  ]);
+  return {
+    usersCount: uRows.length,
+    cleanersCount: cRows.length,
+    ticketsCount: tRows.length,
+    jobberConfigsCount: jRows.length,
+  };
+}
+
 app.get("/api/db/health", async (_req, res) => {
   try {
-    const testResult = await db.select().from(dbSchema.cleaners).limit(1);
+    const counts = await syncStoreToCloudSqlIfNeeded();
     res.json({
       status: "connected",
       database: process.env.SQL_DB_NAME || "cloudsql",
       host: process.env.SQL_HOST ? "cloud_sql_proxy" : "unavailable",
-      cleanersTableCount: testResult.length,
+      cleanersTableCount: counts.cleanersCount,
+      ticketsTableCount: counts.ticketsCount,
+      usersTableCount: counts.usersCount,
+      jobberConfigsCount: counts.jobberConfigsCount,
     });
   } catch (error: any) {
     console.error("Database health query error:", error?.message);
@@ -12276,7 +12397,13 @@ function collectWorkspaceFilesForGitHub(dirPath: string, relativeRoot = ""): Git
     for (const entry of entries) {
       if (EXCLUDED_ZIP_DIRS.has(entry.name) || entry.name === ".github" || entry.name === ".aistudio") continue;
       if (entry.name.startsWith(".env") && entry.name !== ".env.example") continue;
-      if (entry.name.endsWith(".zip") || entry.name.endsWith(".log") || entry.name === "bun.lock") continue;
+      if (
+        entry.name.endsWith(".zip") ||
+        entry.name.endsWith(".log") ||
+        entry.name === "bun.lock" ||
+        entry.name === "tidyups_google_drive_session.json"
+      )
+        continue;
       const fullPath = path.join(dirPath, entry.name);
       const relPath = relativeRoot ? `${relativeRoot}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
@@ -12501,13 +12628,14 @@ app.get("/api/project/github-status", async (_req, res) => {
     const store = loadStore();
     const ghCfg = store?.githubConfig || {};
     const owner = ghCfg.owner || "Ai-Builder6";
-    const rawSavedRepo = ghCfg.repo || "APP.TIDYUPSCLEANING.COM-START-PR6";
-    const repo = /PR[1-5]$/i.test(rawSavedRepo)
-      ? rawSavedRepo.replace(/PR[1-5]$/i, "PR6")
-      : rawSavedRepo;
+    const rawSavedRepo = ghCfg.repo || "APP.TIDYUPSCLEANING.COM-PR16";
+    const repo =
+      /PR[1-5]$/i.test(rawSavedRepo) || rawSavedRepo.toUpperCase() === "APP.TIDYUPSCLEANING.COM-START-PR6"
+        ? "APP.TIDYUPSCLEANING.COM-PR16"
+        : rawSavedRepo;
     const token = resolveServerGithubToken(undefined, ghCfg.token);
 
-    if (token && (!ghCfg.token || ghCfg.token !== token)) {
+    if (token && (!ghCfg.token || ghCfg.token !== token || ghCfg.repo !== repo)) {
       try {
         store.githubConfig = {
           ...ghCfg,
@@ -12552,7 +12680,7 @@ app.get("/api/project/github-status", async (_req, res) => {
       owner,
       repo,
       fullRepoName: `${owner}/${repo}`,
-      aiStudioSafeRepoName: `app-tidyupscleaning-com-start-pr${Math.max(6, Number(store?.zipPrCounter || 6))}`,
+      aiStudioSafeRepoName: `app-tidyupscleaning-com-pr${Math.max(16, Number(store?.zipPrCounter || 16))}`,
       lastPushedAt: ghCfg.lastPushedAt || null,
       lastPushedPr: ghCfg.lastPushedPr || null,
       lastPushedUrl: ghCfg.lastPushedUrl || `https://github.com/${owner}/${repo}`,
@@ -12568,14 +12696,14 @@ app.post("/api/project/github-push", async (req, res) => {
     const store = loadStore() || ({} as any);
     const body = req.body || {};
     const owner = String(body.owner || store.githubConfig?.owner || "Ai-Builder6").trim();
-    let rawRepo = String(body.repo || store.githubConfig?.repo || "APP.TIDYUPSCLEANING.COM-START-PR6").trim();
-    // Strip leading "Ai-Builder6/" if user pasted "Ai-Builder6/APP.TIDYUPSCLEANING.COM-START-PR6"
+    let rawRepo = String(body.repo || store.githubConfig?.repo || "APP.TIDYUPSCLEANING.COM-PR16").trim();
+    // Strip leading "Ai-Builder6/" if user pasted "Ai-Builder6/APP.TIDYUPSCLEANING.COM-PR16"
     if (rawRepo.includes("/")) {
       const parts = rawRepo.split("/").filter(Boolean);
       rawRepo = parts[parts.length - 1];
     }
     if (/PR[1-5]$/i.test(rawRepo)) {
-      rawRepo = rawRepo.replace(/PR[1-5]$/i, "PR6");
+      rawRepo = rawRepo.replace(/PR[1-5]$/i, "PR16");
     }
     const token = resolveServerGithubToken(body.token, store.githubConfig?.token);
     if (!token) {
@@ -12585,12 +12713,12 @@ app.post("/api/project/github-push", async (req, res) => {
       });
     }
 
-    const nextCounter = Math.max(6, Number(store.zipPrCounter || 5) + 1);
+    const nextCounter = Math.max(16, Number(store.zipPrCounter || 15) + (body.createNewCopy ? 1 : 0));
     const currentPr = Math.max(6, Number(body.prNumber || nextCounter));
     const prLabel = `PR${currentPr}`;
     const targetRepo =
       body.createNewCopy || body.usePrInRepoName
-        ? rawRepo.replace(/-PR\d+$/i, "") + `-${prLabel}`
+        ? rawRepo.replace(/(-START)?-PR\d+$/i, "") + `-${prLabel}`
         : rawRepo;
 
     const ghHeaders: Record<string, string> = {

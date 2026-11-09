@@ -1,8 +1,9 @@
 {
-  "projectName": "TidyUps Cleaning Service Inc — PR15 Archive",
-  "prLabel": "PR15",
-  "prNumber": 15,
-  "zipFilename": "app.tidyups.cleaning-PR15-2026-11-09-Afternoon-01-52PM.zip",
+  "projectName": "TidyUps Cleaning Service Inc — PR16 Archive",
+  "prLabel": "PR16",
+  "prNumber": 16,
+  "githubRepo": "Ai-Builder6/APP.TIDYUPSCLEANING.COM-PR16",
+  "zipFilename": "app.tidyups.cleaning-PR16-2026-11-09-Afternoon.zip",
   "domain": "app.tidyups.cleaning",
   "productionDomain": "app.tidyupscleaning.com",
   "bookingUrl": "https://app.tidyupscleaning.com/booking",
@@ -37,6 +38,6 @@
     "cloudbuild.yaml",
     "Dockerfile"
   ],
-  "totalFilesPackaged": 123,
-  "exportedAt": "2026-11-09T20:52:41.700Z"
+  "totalFilesPackaged": 125,
+  "exportedAt": "2026-11-09T23:50:00.000Z"
 }

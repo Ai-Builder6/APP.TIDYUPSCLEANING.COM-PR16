@@ -101,9 +101,9 @@ export const ProjectBackupDriveModal: React.FC<ProjectBackupDriveModalProps> = (
   const [copiedGitCmd, setCopiedGitCmd] = useState<boolean>(false);
   const [copiedSafeRepoName, setCopiedSafeRepoName] = useState<boolean>(false);
 
-  // Direct GitHub Push State (Ai-Builder6/APP.TIDYUPSCLEANING.COM-START-PR6)
+  // Direct GitHub Push State (Ai-Builder6/APP.TIDYUPSCLEANING.COM-PR16)
   const [githubOwner, setGithubOwner] = useState<string>('Ai-Builder6');
-  const [githubRepo, setGithubRepo] = useState<string>('APP.TIDYUPSCLEANING.COM-START-PR6');
+  const [githubRepo, setGithubRepo] = useState<string>('APP.TIDYUPSCLEANING.COM-PR16');
   const [githubTokenInput, setGithubTokenInput] = useState<string>('');
   const [hasSavedGithubToken, setHasSavedGithubToken] = useState<boolean>(false);
   const [isPushingGithub, setIsPushingGithub] = useState<boolean>(false);
@@ -685,7 +685,7 @@ export const ProjectBackupDriveModal: React.FC<ProjectBackupDriveModalProps> = (
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-1">
                       Quick Select PR#:
                     </span>
-                    {['PR6', 'PR7', 'PR8', 'PR9', 'PR10', 'PR11', 'PR12', 'PR13', 'PR14', 'PR15'].map((pr) => (
+                    {['PR6', 'PR7', 'PR8', 'PR9', 'PR10', 'PR11', 'PR12', 'PR13', 'PR14', 'PR15', 'PR16'].map((pr) => (
                       <button
                         key={pr}
                         type="button"
@@ -1182,11 +1182,12 @@ export const ProjectBackupDriveModal: React.FC<ProjectBackupDriveModalProps> = (
                   </div>
                 </div>
 
-                {/* Quick PR6, PR7, PR8, PR9, PR10 Repo Name Switcher */}
+                {/* Quick PR6–PR16 Repo Name Switcher */}
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[11px] font-bold text-slate-400">Quick Select PR Repo (PR6+):</span>
-                  {['PR6', 'PR7', 'PR8', 'PR9', 'PR10', 'PR11'].map((pr) => {
-                    const candidate = `APP.TIDYUPSCLEANING.COM-START-${pr}`;
+                  <span className="text-[11px] font-bold text-slate-400">Quick Select PR Repo:</span>
+                  {['PR16', 'PR15', 'PR14', 'PR11', 'PR10', 'PR9', 'PR8', 'PR7', 'PR6'].map((pr) => {
+                    const prNum = parseInt(pr.replace(/\D+/g, ''), 10) || 16;
+                    const candidate = prNum >= 16 ? `APP.TIDYUPSCLEANING.COM-${pr}` : `APP.TIDYUPSCLEANING.COM-START-${pr}`;
                     const active = githubRepo.toUpperCase().endsWith(`-${pr}`);
                     return (
                       <button

@@ -1,5 +1,5 @@
 ===============================================================================
-  TIDYUPS CLEANING SERVICE INC. (app.tidyupscleaning.com) — PR15 ARCHIVE
+  TIDYUPS CLEANING SERVICE INC. (app.tidyupscleaning.com) — PR16 ARCHIVE
   HOW TO BUILD & RUN THIS ENTIRE PROJECT IN 1 CLICK
 ===============================================================================
 
@@ -26,13 +26,15 @@ OPTION C — TERMINAL / CURSOR / AI STUDIO / CLAUDE CODE:
   2. Facebook Messenger 24/7 AI Sales, Quote & Lead Intake Bot (3 Pages)
   3. Continuous Voice Dictation & Gemini AI Phone Quote Bot + Closest Van Map
   4. Quo (OpenPhone) 6-Line Call Transcript & Sonia AI Lead Engine Bot
+     - Includes Default Placeholder vs. Verified Caller Info Badges & SMS Sync
   5. Twilio Bam Shield / Spam Shield + Live Incoming Call List (All/Allowed/Blocked)
   6. 9-Tab Visual Clean Google Sheets Builder (RFC 2387 multipart — no 'blob' tab)
 
   PUBLIC PAGES INCLUDED:
-  - https://app.tidyupscleaning.com/booking  (100% Blank Fresh Start + Start Over Button)
-  - https://app.tidyupscleaning.com/support  (Customer & Jobber Marketplace Support)
-  - https://app.tidyupscleaning.com/contact  (Public Contact Us & Direct Dispatch Form)
-  - https://app.tidyupscleaning.com/T&C      (Official Terms & Conditions)
-  - https://app.tidyupscleaning.com/privacy  (Official Privacy Policy)
+  - https://app.tidyupscleaning.com/booking    (100% Blank Fresh Start + Start Over Button)
+  - https://app.tidyupscleaning.com/thank-you  (Conversion Tracking & Booking Confirmation)
+  - https://app.tidyupscleaning.com/support    (Customer & Jobber Marketplace Support)
+  - https://app.tidyupscleaning.com/contact    (Public Contact Us & Direct Dispatch Form)
+  - https://app.tidyupscleaning.com/T&C        (Official Terms & Conditions)
+  - https://app.tidyupscleaning.com/privacy    (Official Privacy Policy)
 ===============================================================================
