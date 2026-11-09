@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan for the In-App Live Call Screener, Original Dialed-Line Attribution (preserving 587-900-7223 GMB Direct & campaign tags when Twilio routes clean calls to a receiving line), In-App Call Controls (Answer, Pre-fill Quick Quote, Live Hangup & Area-Code Block), and dual-mode Answering (In-App + Quo Receiving Line).",
+  "updatedAt":  "2026-10-24T00:03:59.558059754Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

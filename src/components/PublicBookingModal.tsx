@@ -1,0 +1,2011 @@
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { triggerGoogleAdsConversion } from './CookieConsentBanner';
+import {
+  CheckCircle2,
+  Sparkles,
+  Calendar,
+  Clock,
+  User,
+  Mail,
+  Home,
+  ShieldCheck,
+  ArrowRight,
+  X,
+  ExternalLink,
+  Copy,
+  Check,
+  Calculator,
+  Lock,
+  Mic,
+  MicOff,
+  Wand2,
+  Users,
+  Volume2,
+  RotateCcw,
+} from 'lucide-react';
+import { ServiceTicket } from '../types/dispatch';
+import { AddressAutocompleteInput } from './AddressAutocompleteInput';
+import { TidyUpsBunnyLogo } from './TidyUpsBunnyLogo';
+import { ThankYouConversionPage } from './ThankYouConversionPage';
+
+export interface PublicBookingModalProps {
+  isOpen: boolean;
+  onClose?: () => void;
+  onBookingCreated?: (ticket: ServiceTicket, fullPayload?: any) => void;
+  mode?: 'MODAL' | 'STANDALONE_PAGE';
+  onSwitchToCalculatorMode?: () => void;
+  onPreviewThankYouPage?: () => void;
+  onOpenStaffLogin?: () => void;
+  isOwnerViewing?: boolean;
+}
+
+const THREE_BOOKING_OPTIONS = [
+  {
+    id: 'Move-Out Cleaning' as const,
+    shortLabel: 'Move-Out',
+    title: 'Move-Out Cleaning',
+    colorTag: '🔵 Blue Tier • Vacant Turnover',
+    badge: 'Min 3 Hrs (2 Cleaners) or 6 Hrs (1 Cleaner)',
+    ruleSummary: '2 Cleaners: 3 hrs min ($105/hr) • 1 Cleaner: Starts at 6 hrs ($52.50/hr)',
+    description:
+      'Complete empty-home or condo turnover: inside oven, inside fridge, inside all cabinets & drawers, baseboards, bathrooms, and floors.',
+    topBarClass: 'bg-gradient-to-r from-sky-400 via-[#1877F2] to-indigo-500',
+    unselectedCardClass:
+      'border-blue-500/45 bg-gradient-to-b from-blue-950/45 via-slate-900/95 to-slate-950 hover:border-sky-400 hover:shadow-[0_0_22px_rgba(24,119,242,0.3)] text-slate-200',
+    selectedCardClass:
+      'border-sky-400 bg-gradient-to-b from-[#1877F2]/35 via-blue-950/90 to-slate-950 text-white shadow-[0_0_30px_rgba(24,119,242,0.5)] ring-2 ring-sky-400/50 scale-[1.02]',
+    titleTextClass: 'text-sky-300',
+    pillBadgeClass: 'bg-[#1877F2]/25 border border-sky-400/50 text-sky-200',
+    selectedPillBadgeClass: 'bg-[#1877F2] border border-sky-300 text-white shadow-xs',
+    checkIconClass: 'text-sky-400',
+    buttonGradientClass: 'from-[#1877F2] via-blue-600 to-indigo-600 hover:from-blue-500 hover:via-blue-600 hover:to-indigo-500 shadow-[0_0_25px_rgba(24,119,242,0.45)]',
+  },
+  {
+    id: 'Basic Cleaning' as const,
+    shortLabel: 'Basic Clean',
+    title: 'Basic Cleaning',
+    colorTag: '🟢 Emerald Tier • Standard Upkeep',
+    badge: '1 Pro Cleaner ($52.50/hr)',
+    ruleSummary: '1 Dedicated Cleaner • Standard Residential Maintenance',
+    description:
+      'Essential residential refresh with 1 professional cleaner: kitchen counters & exterior appliances, bathrooms sanitized, dusting, HEPA vacuuming & mopping.',
+    topBarClass: 'bg-gradient-to-r from-emerald-400 via-[#0F9D58] to-teal-500',
+    unselectedCardClass:
+      'border-emerald-500/45 bg-gradient-to-b from-emerald-950/45 via-slate-900/95 to-slate-950 hover:border-emerald-400 hover:shadow-[0_0_22px_rgba(15,157,88,0.3)] text-slate-200',
+    selectedCardClass:
+      'border-emerald-400 bg-gradient-to-b from-[#0F9D58]/35 via-emerald-950/90 to-slate-950 text-white shadow-[0_0_30px_rgba(15,157,88,0.5)] ring-2 ring-emerald-400/50 scale-[1.02]',
+    titleTextClass: 'text-emerald-300',
+    pillBadgeClass: 'bg-[#0F9D58]/25 border border-emerald-400/50 text-emerald-200',
+    selectedPillBadgeClass: 'bg-[#0F9D58] border border-emerald-300 text-white shadow-xs',
+    checkIconClass: 'text-emerald-400',
+    buttonGradientClass: 'from-[#0F9D58] via-emerald-600 to-teal-600 hover:from-emerald-500 hover:via-emerald-600 hover:to-teal-500 shadow-[0_0_25px_rgba(15,157,88,0.45)]',
+  },
+  {
+    id: 'Deep Cleaning' as const,
+    shortLabel: 'Deep Clean',
+    title: 'Deep Cleaning',
+    colorTag: '🟣 Purple Tier • Heavy Detail Scrub',
+    badge: 'Min 2 Cleaners for 2 Hrs ($105/hr)',
+    ruleSummary: 'Minimum 2 Cleaners for 2+ Hours • Top-to-Bottom Detail Scrub',
+    description:
+      'Intensive 2-cleaner team scrub: hand-wiped baseboards, doors, frames, light switches, heavy kitchen degreasing, and bathroom tile & grout scrub.',
+    topBarClass: 'bg-gradient-to-r from-violet-400 via-[#7C3AED] to-fuchsia-500',
+    unselectedCardClass:
+      'border-purple-500/45 bg-gradient-to-b from-purple-950/45 via-slate-900/95 to-slate-950 hover:border-purple-400 hover:shadow-[0_0_22px_rgba(124,58,237,0.3)] text-slate-200',
+    selectedCardClass:
+      'border-purple-400 bg-gradient-to-b from-[#7C3AED]/35 via-purple-950/90 to-slate-950 text-white shadow-[0_0_30px_rgba(124,58,237,0.5)] ring-2 ring-purple-400/50 scale-[1.02]',
+    titleTextClass: 'text-purple-300',
+    pillBadgeClass: 'bg-[#7C3AED]/25 border border-purple-400/50 text-purple-200',
+    selectedPillBadgeClass: 'bg-[#7C3AED] border border-purple-300 text-white shadow-xs',
+    checkIconClass: 'text-purple-400',
+    buttonGradientClass: 'from-[#7C3AED] via-purple-600 to-fuchsia-600 hover:from-purple-500 hover:via-purple-600 hover:to-fuchsia-500 shadow-[0_0_25px_rgba(124,58,237,0.45)]',
+  },
+] as const;
+
+type HighlightFieldKey =
+  | 'serviceType'
+  | 'firstName'
+  | 'lastName'
+  | 'phone'
+  | 'email'
+  | 'address'
+  | 'city'
+  | 'bedrooms'
+  | 'bathrooms'
+  | 'cleanerCount'
+  | 'preferredDate'
+  | 'preferredTime'
+  | 'specialInstructions';
+
+export const PublicBookingModal: React.FC<PublicBookingModalProps> = ({
+  isOpen,
+  onClose,
+  onBookingCreated,
+  mode = 'MODAL',
+  onSwitchToCalculatorMode,
+  onPreviewThankYouPage,
+  onOpenStaffLogin,
+  isOwnerViewing = false,
+}) => {
+  const [step, setStep] = useState<'FORM' | 'SUCCESS'>('FORM');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [createdSummary, setCreatedSummary] = useState<any>(null);
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+
+  // 3 Simple Options: Move-Out, Basic, Deep — starts blank ('') so 0/8 boxes are pre-filled on open!
+  const [serviceType, setServiceType] = useState<
+    'Move-Out Cleaning' | 'Basic Cleaning' | 'Deep Cleaning' | ''
+  >('');
+
+  // Split Customer Name: First Name + Last Name — all fields start 100% blank on open
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [address, setAddress] = useState('');
+  const [city, setCity] = useState('');
+  const [postalCode, setPostalCode] = useState('');
+  const [bedrooms, setBedrooms] = useState('');
+  const [bathrooms, setBathrooms] = useState('');
+  const [cleanerCount, setCleanerCount] = useState<1 | 2>(2);
+  // Auto-detect Facebook Ads & Google Ads parameters (?source=..., ?utm_source=..., ?fbclid=..., ?gclid=...) on app.tidyupscleaning.com/booking
+  const detectedAdRouting = useMemo(() => {
+    if (typeof window === 'undefined') {
+      return {
+        defaultHeardAbout: 'Google Search / Ad',
+        adTab: 'Other Ads',
+        utmSource: 'app.tidyupscleaning.com/booking',
+        fbclid: '',
+        gclid: '',
+      };
+    }
+    const params = new URLSearchParams(window.location.search);
+    const rawSource = (
+      params.get('source') ||
+      params.get('utm_source') ||
+      params.get('tab') ||
+      params.get('utm_campaign') ||
+      ''
+    ).toLowerCase();
+    const fbclid = params.get('fbclid') || '';
+    const gclid = params.get('gclid') || '';
+    const ref = (document.referrer || '').toLowerCase();
+
+    if (rawSource.includes('facebook_leads_2') || rawSource.includes('fb2') || rawSource.includes('facebook 2')) {
+      return {
+        defaultHeardAbout: 'Facebook Ad (Campaign 2)',
+        adTab: 'Facebook Leads 2',
+        utmSource: 'Facebook Leads 2',
+        fbclid,
+        gclid,
+      };
+    }
+    if (rawSource.includes('facebook_ai') || rawSource.includes('messenger')) {
+      return {
+        defaultHeardAbout: 'Facebook Messenger AI',
+        adTab: 'Facebook AI',
+        utmSource: 'Facebook AI',
+        fbclid,
+        gclid,
+      };
+    }
+    if (
+      rawSource.includes('fb') ||
+      rawSource.includes('facebook') ||
+      rawSource.includes('instagram') ||
+      rawSource.includes('meta') ||
+      Boolean(fbclid) ||
+      ref.includes('facebook.com') ||
+      ref.includes('instagram.com')
+    ) {
+      return {
+        defaultHeardAbout: 'Facebook / Instagram Ad',
+        adTab: 'Facebook Leads 1',
+        utmSource: 'Facebook Leads 1',
+        fbclid,
+        gclid,
+      };
+    }
+    if (rawSource.includes('google_leads_2') || rawSource.includes('google2') || rawSource.includes('google 2')) {
+      return {
+        defaultHeardAbout: 'Google Search / Ad (Campaign 2)',
+        adTab: 'Google Leads 2',
+        utmSource: 'Google Leads 2',
+        fbclid,
+        gclid,
+      };
+    }
+    if (
+      rawSource.includes('google') ||
+      rawSource.includes('gmb') ||
+      rawSource.includes('lsa') ||
+      Boolean(gclid) ||
+      ref.includes('google.')
+    ) {
+      return {
+        defaultHeardAbout: 'Google Search / Ad',
+        adTab: 'Google Leads 1',
+        utmSource: 'Google Leads 1',
+        fbclid,
+        gclid,
+      };
+    }
+    return {
+      defaultHeardAbout: 'Website (app.tidyupscleaning.com/booking)',
+      adTab: 'Other Ads',
+      utmSource: rawSource || 'app.tidyupscleaning.com/booking',
+      fbclid,
+      gclid,
+    };
+  }, []);
+
+  const [preferredDate, setPreferredDate] = useState('');
+  const [preferredTime, setPreferredTime] = useState('');
+  const [heardAbout, setHeardAbout] = useState(() => detectedAdRouting.defaultHeardAbout);
+  const [specialInstructions, setSpecialInstructions] = useState('');
+
+  // Continuous Voice Dictation & Box Lighting State (Never shuts off on pause until Stop is clicked)
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState('');
+  const [interimTranscript, setInterimTranscript] = useState('');
+  const [isParsingVoice, setIsParsingVoice] = useState(false);
+  const [voiceStatusMsg, setVoiceStatusMsg] = useState<string | null>(null);
+  const [flashingFields, setFlashingFields] = useState<Record<string, boolean>>({});
+  const [voiceCapturedFields, setVoiceCapturedFields] = useState<Record<string, boolean>>({});
+
+  const recognitionRef = useRef<any>(null);
+  const shouldKeepRecordingRef = useRef<boolean>(false);
+  const latestTranscriptRef = useRef<string>('');
+  const latestInterimRef = useRef<string>('');
+
+  // Enforce strict Cleaner Crew rules whenever Service Type changes:
+  // - Basic Cleaning: 1 Cleaner only
+  // - Deep Cleaning: Minimum 2 Cleaners (2 hrs min)
+  // - Move-Out Cleaning: Default 2 Cleaners (min 3 hrs) or allow 1 Cleaner (starts at 6 hrs)
+  useEffect(() => {
+    if (serviceType === 'Basic Cleaning') {
+      setCleanerCount(1);
+    } else if (serviceType === 'Deep Cleaning') {
+      setCleanerCount(2);
+    } else if (serviceType === 'Move-Out Cleaning') {
+      setCleanerCount((prev) => (prev === 1 ? 1 : 2));
+    }
+  }, [serviceType]);
+
+  // Stop recognition on unmount
+  useEffect(() => {
+    return () => {
+      shouldKeepRecordingRef.current = false;
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+    };
+  }, []);
+
+  const triggerFieldHighlight = useCallback((fieldKey: HighlightFieldKey) => {
+    setFlashingFields((prev) => ({ ...prev, [fieldKey]: true }));
+    setVoiceCapturedFields((prev) => ({ ...prev, [fieldKey]: true }));
+    setTimeout(() => {
+      setFlashingFields((prev) => ({ ...prev, [fieldKey]: false }));
+    }, 2600);
+  }, []);
+
+  // Real-time live speech extraction as user speaks so boxes light up immediately
+  const applyLiveSpeechExtraction = useCallback(
+    (rawText: string) => {
+      const text = rawText.trim();
+      if (!text) return;
+      const lower = text.toLowerCase();
+
+      // 1. Service Type
+      if (lower.includes('move out') || lower.includes('move-out') || lower.includes('moving out')) {
+        setServiceType('Move-Out Cleaning');
+        triggerFieldHighlight('serviceType');
+      } else if (lower.includes('deep clean') || lower.includes('deep')) {
+        setServiceType('Deep Cleaning');
+        setCleanerCount(2);
+        triggerFieldHighlight('serviceType');
+        triggerFieldHighlight('cleanerCount');
+      } else if (lower.includes('basic') || lower.includes('standard') || lower.includes('regular')) {
+        setServiceType('Basic Cleaning');
+        setCleanerCount(1);
+        triggerFieldHighlight('serviceType');
+        triggerFieldHighlight('cleanerCount');
+      }
+
+      // 2. Cleaner Crew count (if Move-Out)
+      if (lower.includes('one cleaner') || lower.includes('1 cleaner') || lower.includes('single cleaner')) {
+        if (serviceType !== 'Deep Cleaning') {
+          setCleanerCount(1);
+          triggerFieldHighlight('cleanerCount');
+        }
+      } else if (lower.includes('two cleaner') || lower.includes('2 cleaner')) {
+        if (serviceType !== 'Basic Cleaning') {
+          setCleanerCount(2);
+          triggerFieldHighlight('cleanerCount');
+        }
+      }
+
+      // 3. Phone Number
+      const phoneMatch = text.match(/(?:\+?1[-.\s]?)?\(?([2-9]\d{2})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})/);
+      if (phoneMatch) {
+        const formattedPhone = `(${phoneMatch[1]}) ${phoneMatch[2]}-${phoneMatch[3]}`;
+        setPhone(formattedPhone);
+        triggerFieldHighlight('phone');
+      }
+
+      // 4. Email
+      const emailMatch = text.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
+      if (emailMatch) {
+        setEmail(emailMatch[1].toLowerCase());
+        triggerFieldHighlight('email');
+      }
+
+      // 5. First Name & Last Name
+      const namePatterns = [
+        /(?:my name is|name is|this is|i am|i'm|for)\s+([A-Z][a-z]+)(?:\s+([A-Z][a-z]+))?/i,
+        /^([A-Z][a-z]{2,15})\s+([A-Z][a-z]{2,18})\b/,
+      ];
+      for (const pat of namePatterns) {
+        const m = text.match(pat);
+        if (m && m[1]) {
+          const stopWords = new Set(['looking', 'calling', 'booking', 'needing', 'wanting', 'moving', 'cleaning', 'basic', 'deep', 'move']);
+          const candFirst = m[1].trim();
+          const candLast = (m[2] || '').trim();
+          if (!stopWords.has(candFirst.toLowerCase())) {
+            setFirstName(candFirst.charAt(0).toUpperCase() + candFirst.slice(1));
+            triggerFieldHighlight('firstName');
+            if (candLast && !stopWords.has(candLast.toLowerCase())) {
+              setLastName(candLast.charAt(0).toUpperCase() + candLast.slice(1));
+              triggerFieldHighlight('lastName');
+            }
+            break;
+          }
+        }
+      }
+
+      // 6. Bedrooms & Bathrooms
+      const bedMatch = lower.match(/(\d+|one|two|three|four|five|six)\s*(?:bed|bedroom|bdrm)/i);
+      if (bedMatch) {
+        const wordToNum: Record<string, string> = { one: '1', two: '2', three: '3', four: '4', five: '5', six: '6' };
+        const n = wordToNum[bedMatch[1].toLowerCase()] || bedMatch[1];
+        setBedrooms(n === '1' ? '1 Bedroom' : `${n} Bedrooms`);
+        triggerFieldHighlight('bedrooms');
+      }
+      const bathMatch = lower.match(/(\d+(?:\.5)?|one|two|three|four)\s*(?:bath|bathroom)/i);
+      if (bathMatch) {
+        const wordToNum: Record<string, string> = { one: '1', two: '2', three: '3', four: '4' };
+        const n = wordToNum[bathMatch[1].toLowerCase()] || bathMatch[1];
+        setBathrooms(n === '1' ? '1 Bathroom' : `${n} Bathrooms`);
+        triggerFieldHighlight('bathrooms');
+      }
+
+      // 7. Street Address & City
+      const addrMatch = text.match(
+        /\b(\d{2,5}\s+(?:[A-Za-z0-9.]+\s+){1,4}(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Boulevard|Blvd|Way|Lane|Ln|Court|Ct|Place|Pl|Crescent|Cres|Trail|Tr|Close|Loop|Gate|Point|Terrace)(?:\s+(?:NW|NE|SW|SE|North|South|East|West))?)/i
+      );
+      if (addrMatch && addrMatch[1]) {
+        setAddress(addrMatch[1].trim());
+        triggerFieldHighlight('address');
+      }
+      if (lower.includes('st. albert') || lower.includes('st albert') || lower.includes('saint albert')) {
+        setCity('St. Albert');
+        triggerFieldHighlight('city');
+      } else if (lower.includes('sherwood park')) {
+        setCity('Sherwood Park');
+        triggerFieldHighlight('city');
+      } else if (lower.includes('spruce grove')) {
+        setCity('Spruce Grove');
+        triggerFieldHighlight('city');
+      } else if (lower.includes('leduc')) {
+        setCity('Leduc');
+        triggerFieldHighlight('city');
+      } else if (lower.includes('beaumont')) {
+        setCity('Beaumont');
+        triggerFieldHighlight('city');
+      } else if (lower.includes('fort saskatchewan')) {
+        setCity('Fort Saskatchewan');
+        triggerFieldHighlight('city');
+      } else if (lower.includes('edmonton')) {
+        setCity('Edmonton');
+        triggerFieldHighlight('city');
+      }
+
+      // 8. Preferred Time Window
+      if (lower.includes('morning')) {
+        setPreferredTime('Morning (8:00 AM - 12:00 PM)');
+        triggerFieldHighlight('preferredTime');
+      } else if (lower.includes('afternoon')) {
+        setPreferredTime('Afternoon (12:00 PM - 4:00 PM)');
+        triggerFieldHighlight('preferredTime');
+      }
+    },
+    [serviceType, triggerFieldHighlight]
+  );
+
+  const handleServerVoiceParse = useCallback(
+    async (transcriptToParse: string) => {
+      const clean = transcriptToParse.trim();
+      if (!clean) return;
+      setIsParsingVoice(true);
+      applyLiveSpeechExtraction(clean);
+      try {
+        const res = await fetch('/api/dispatch/parse-voice-ticket', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transcript: clean }),
+        });
+        const data = await res.json();
+        if (data) {
+          if (data.customerName && data.customerName !== 'Residential Client') {
+            const parts = String(data.customerName).trim().split(/\s+/);
+            if (parts[0]) {
+              setFirstName(parts[0]);
+              triggerFieldHighlight('firstName');
+            }
+            if (parts.length > 1) {
+              setLastName(parts.slice(1).join(' '));
+              triggerFieldHighlight('lastName');
+            }
+          }
+          if (data.phone) {
+            setPhone(data.phone);
+            triggerFieldHighlight('phone');
+          }
+          if (data.email) {
+            setEmail(data.email);
+            triggerFieldHighlight('email');
+          }
+          if (data.address) {
+            setAddress(data.address);
+            triggerFieldHighlight('address');
+          }
+          if (data.city) {
+            setCity(data.city);
+            triggerFieldHighlight('city');
+          }
+          if (data.preferredDate) {
+            setPreferredDate(data.preferredDate);
+            triggerFieldHighlight('preferredDate');
+          }
+          if (data.timeWindow) {
+            setPreferredTime(data.timeWindow);
+            triggerFieldHighlight('preferredTime');
+          }
+          if (data.bedrooms) {
+            setBedrooms(data.bedrooms);
+            triggerFieldHighlight('bedrooms');
+          }
+          if (data.bathrooms) {
+            setBathrooms(data.bathrooms);
+            triggerFieldHighlight('bathrooms');
+          }
+          if (data.specificInstructions) {
+            setSpecialInstructions(data.specificInstructions);
+            triggerFieldHighlight('specialInstructions');
+          } else {
+            setSpecialInstructions(clean);
+            triggerFieldHighlight('specialInstructions');
+          }
+
+          const cat = String(data.serviceCategory || '').toLowerCase();
+          if (cat.includes('move')) {
+            setServiceType('Move-Out Cleaning');
+            triggerFieldHighlight('serviceType');
+          } else if (cat.includes('deep')) {
+            setServiceType('Deep Cleaning');
+            setCleanerCount(2);
+            triggerFieldHighlight('serviceType');
+            triggerFieldHighlight('cleanerCount');
+          } else if (cat.includes('basic') || cat.includes('standard')) {
+            setServiceType('Basic Cleaning');
+            setCleanerCount(1);
+            triggerFieldHighlight('serviceType');
+            triggerFieldHighlight('cleanerCount');
+          }
+          setVoiceStatusMsg('✓ All spoken details matched & lit up in the boxes below!');
+        }
+      } catch {
+        setVoiceStatusMsg('✓ Live voice details applied to form boxes!');
+      } finally {
+        setIsParsingVoice(false);
+      }
+    },
+    [applyLiveSpeechExtraction, triggerFieldHighlight]
+  );
+
+  // Continuous Microphone Toggle — Never shuts off on pause until user clicks Stop
+  const handleToggleContinuousMic = () => {
+    if (isRecordingVoice) {
+      shouldKeepRecordingRef.current = false;
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+      setIsRecordingVoice(false);
+      const fullFinal = `${latestTranscriptRef.current || voiceTranscript} ${
+        latestInterimRef.current || interimTranscript
+      }`.trim();
+      if (fullFinal) {
+        latestTranscriptRef.current = fullFinal;
+        latestInterimRef.current = '';
+        setVoiceTranscript(fullFinal);
+        setInterimTranscript('');
+        handleServerVoiceParse(fullFinal);
+      }
+      return;
+    }
+
+    const SpeechRec =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRec) {
+      setVoiceStatusMsg(
+        'Microphone API not detected in this browser — type or paste below and click "Light Up Boxes".'
+      );
+      return;
+    }
+
+    try {
+      shouldKeepRecordingRef.current = true;
+      latestTranscriptRef.current = voiceTranscript;
+      latestInterimRef.current = '';
+
+      const startContinuousRec = () => {
+        const recognition = new SpeechRec();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.maxAlternatives = 3;
+        recognition.lang = 'en-CA';
+
+        recognition.onstart = () => {
+          setIsRecordingVoice(true);
+          setVoiceStatusMsg(
+            '🎙️ Continuous Mic Active (Will NOT shut off when you pause!) — Speak First & Last Name, Phone, Address, Bedrooms, Bathrooms & Date...'
+          );
+        };
+
+        recognition.onresult = (event: any) => {
+          let finalChunk = '';
+          let interimChunk = '';
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const t = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+              finalChunk += t + ' ';
+            } else {
+              interimChunk += t;
+            }
+          }
+          const prevBase = latestTranscriptRef.current;
+          const updated = finalChunk ? `${prevBase} ${finalChunk}`.trim() : prevBase;
+          latestTranscriptRef.current = updated;
+          latestInterimRef.current = interimChunk;
+
+          const combinedStream = `${updated} ${interimChunk}`.trim();
+          if (combinedStream) {
+            applyLiveSpeechExtraction(combinedStream);
+          }
+          setVoiceTranscript(updated);
+          setInterimTranscript(interimChunk);
+        };
+
+        recognition.onerror = (ev: any) => {
+          if (ev?.error === 'not-allowed' || ev?.error === 'service-not-allowed') {
+            shouldKeepRecordingRef.current = false;
+            setIsRecordingVoice(false);
+            setVoiceStatusMsg('Microphone permission was blocked by browser settings.');
+          }
+        };
+
+        recognition.onend = () => {
+          if (latestInterimRef.current.trim()) {
+            const merged = `${latestTranscriptRef.current} ${latestInterimRef.current}`.trim();
+            latestTranscriptRef.current = merged;
+            latestInterimRef.current = '';
+            setVoiceTranscript(merged);
+            setInterimTranscript('');
+          }
+          if (shouldKeepRecordingRef.current) {
+            setTimeout(() => {
+              if (!shouldKeepRecordingRef.current) return;
+              try {
+                recognition.start();
+              } catch {
+                try {
+                  startContinuousRec();
+                } catch {}
+              }
+            }, 90);
+            return;
+          }
+          setIsRecordingVoice(false);
+          setInterimTranscript('');
+        };
+
+        recognitionRef.current = recognition;
+        recognition.start();
+      };
+
+      startContinuousRec();
+    } catch {
+      shouldKeepRecordingRef.current = false;
+      setIsRecordingVoice(false);
+    }
+  };
+
+  // Compute live crew & minimum hours summary based on owner's rules
+  const crewRuleDetails = useMemo(() => {
+    if (serviceType === 'Basic Cleaning') {
+      return {
+        cleaners: 1,
+        minHours: 3,
+        hourlyRate: 52.5,
+        startingSubtotal: 157.5,
+        badgeText: '1 Cleaner Only ($52.50/hr)',
+        ruleExplanation: 'Basic Cleaning is performed by 1 dedicated cleaner.',
+      };
+    }
+    if (serviceType === 'Deep Cleaning') {
+      return {
+        cleaners: 2,
+        minHours: 2,
+        hourlyRate: 105.0,
+        startingSubtotal: 210.0,
+        badgeText: 'Minimum 2 Cleaners for 2 Hrs ($105/hr = $210+)',
+        ruleExplanation: 'Deep Cleaning requires a minimum of 2 cleaners for 2+ hours.',
+      };
+    }
+    // Move-Out Cleaning
+    if (cleanerCount === 1) {
+      return {
+        cleaners: 1,
+        minHours: 6,
+        hourlyRate: 52.5,
+        startingSubtotal: 315.0,
+        badgeText: '1 Cleaner • Starts at 6 Hours Minimum ($52.50/hr = $315+)',
+        ruleExplanation: 'Move-Out Cleaning with 1 cleaner starts at a 6-hour minimum.',
+      };
+    }
+    return {
+      cleaners: 2,
+      minHours: 3,
+      hourlyRate: 105.0,
+      startingSubtotal: 315.0,
+      badgeText: '2 Cleaners • Minimum 3 Hours ($105/hr = $315+)',
+      ruleExplanation: 'Move-Out Cleaning with 2 cleaners has a 3-hour minimum.',
+    };
+  }, [serviceType, cleanerCount]);
+
+  const selectedOptionTheme = useMemo(() => {
+    return THREE_BOOKING_OPTIONS.find((opt) => opt.id === serviceType) || null;
+  }, [serviceType]);
+
+  // Helper for glowing lit-up box styling (matches Voice Dictation Intake page)
+  const getLitBoxClass = (fieldKey: HighlightFieldKey, isFilled: boolean) => {
+    const isFlashing = Boolean(flashingFields[fieldKey]);
+    if (isFlashing) {
+      return 'border-sky-400 bg-gradient-to-br from-sky-950/90 via-indigo-950/80 to-slate-950 ring-4 ring-sky-500/50 shadow-[0_0_25px_rgba(56,189,248,0.65)] scale-[1.01] transition-all duration-300';
+    }
+    if (isFilled) {
+      return 'border-emerald-400/90 bg-gradient-to-br from-emerald-950/55 via-slate-900 to-slate-950 ring-2 ring-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.25)] transition-all duration-300';
+    }
+    return 'border-slate-700/80 bg-slate-900/90 hover:border-sky-400/60 transition-all duration-300';
+  };
+
+  const renderLitBadge = (fieldKey: HighlightFieldKey, isFilled: boolean, required = false) => {
+    const wasVoice = Boolean(voiceCapturedFields[fieldKey]);
+    if (isFilled) {
+      return (
+        <span
+          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider shadow-xs ${
+            wasVoice
+              ? 'bg-gradient-to-r from-sky-500 to-indigo-600 text-white animate-pulse'
+              : 'bg-emerald-500/20 border border-emerald-400 text-emerald-300'
+          }`}
+        >
+          <CheckCircle2 className="w-3 h-3" />
+          <span>{wasVoice ? 'Voice Lit ✓' : 'Filled ✓'}</span>
+        </span>
+      );
+    }
+    return required ? (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/50 text-amber-200 text-[10px] font-black uppercase">
+        Required *
+      </span>
+    ) : (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 text-[10px] font-bold">
+        Optional
+      </span>
+    );
+  };
+
+  // Track required boxes status so user sees all boxes light up in a progress bar
+  const requiredBoxesStatus = useMemo(() => {
+    return [
+      { key: 'serviceType', label: '1. Service Type', filled: Boolean(serviceType) },
+      { key: 'firstName', label: '2. First Name', filled: Boolean(firstName.trim()) },
+      { key: 'lastName', label: '3. Last Name', filled: Boolean(lastName.trim()) },
+      { key: 'phone', label: '4. Mobile Phone', filled: Boolean(phone.trim()) },
+      { key: 'address', label: '5. Street Address', filled: Boolean(address.trim()) },
+      { key: 'bedrooms', label: '6. Bedrooms', filled: Boolean(bedrooms) },
+      { key: 'bathrooms', label: '7. Bathrooms', filled: Boolean(bathrooms) },
+      { key: 'preferredDate', label: '8. Preferred Date', filled: Boolean(preferredDate) },
+    ];
+  }, [serviceType, firstName, lastName, phone, address, bedrooms, bathrooms, preferredDate]);
+
+  const filledRequiredCount = requiredBoxesStatus.filter((b) => b.filled).length;
+
+  if (mode === 'MODAL' && !isOpen) return null;
+
+  const handleCopyBookingUrl = (url: string, key: string) => {
+    navigator.clipboard.writeText(url).catch(() => {});
+    setCopiedUrl(key);
+    setTimeout(() => setCopiedUrl(null), 2500);
+  };
+
+  const fullNameCombined = `${firstName.trim()} ${lastName.trim()}`.trim();
+
+  const handleClearSheet = useCallback(() => {
+    shouldKeepRecordingRef.current = false;
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+    }
+    setIsRecordingVoice(false);
+    latestTranscriptRef.current = '';
+    latestInterimRef.current = '';
+    setVoiceTranscript('');
+    setInterimTranscript('');
+    setServiceType('');
+    setFirstName('');
+    setLastName('');
+    setPhone('');
+    setEmail('');
+    setAddress('');
+    setCity('');
+    setPostalCode('');
+    setBedrooms('');
+    setBathrooms('');
+    setCleanerCount(2);
+    setPreferredDate('');
+    setPreferredTime('');
+    setSpecialInstructions('');
+    setFlashingFields({});
+    setVoiceCapturedFields({});
+    setErrorMsg(null);
+    setVoiceStatusMsg('✓ Sheet cleared! All boxes reset to blank — ready to start fresh.');
+    setTimeout(() => setVoiceStatusMsg(null), 4000);
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!serviceType || !firstName.trim() || !lastName.trim() || !phone.trim() || !address.trim() || !bedrooms || !bathrooms || !preferredDate) {
+      setErrorMsg('Please select your Cleaning Service Type, First Name, Last Name, Mobile Phone Number, Street Address, Bedrooms, Bathrooms, and Preferred Date so all 8 required boxes light up.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrorMsg(null);
+
+    const resolvedAdTab = (() => {
+      if (detectedAdRouting.adTab !== 'Other Ads') return detectedAdRouting.adTab;
+      const h = heardAbout.toLowerCase();
+      if (h.includes('facebook') && h.includes('2')) return 'Facebook Leads 2';
+      if (h.includes('facebook') || h.includes('instagram')) return 'Facebook Leads 1';
+      if (h.includes('google') && h.includes('2')) return 'Google Leads 2';
+      if (h.includes('google')) return 'Google Leads 1';
+      return 'Other Ads';
+    })();
+
+    const bookingPayload = {
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      customerName: fullNameCombined,
+      customerPhone: phone.trim(),
+      customerEmail: email.trim(),
+      serviceType: serviceType || 'Move-Out Cleaning',
+      cleanerCount: crewRuleDetails.cleaners,
+      address: address.trim(),
+      city: city || 'Edmonton',
+      postalCode: postalCode.trim(),
+      bedrooms: bedrooms || '3 Bedrooms',
+      bathrooms: bathrooms || '2 Bathrooms',
+      preferredDate: preferredDate || new Date().toISOString().slice(0, 10),
+      preferredTime: preferredTime || 'Morning (8:00 AM - 12:00 PM)',
+      heardAbout,
+      utmSource: resolvedAdTab,
+      adTab: resolvedAdTab,
+      fbclid: detectedAdRouting.fbclid,
+      gclid: detectedAdRouting.gclid,
+      specialInstructions: specialInstructions.trim(),
+      bookingFormVariant: 'SIMPLE_3_OPTION',
+    };
+
+    try {
+      const res = await fetch('/api/public/book', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bookingPayload),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        try {
+          const w = window as any;
+          w.dataLayer = w.dataLayer || [];
+          const estValue = Number(data?.quote?.total || crewRuleDetails.startingSubtotal || 1.0);
+          w.dataLayer.push({
+            event: 'generate_lead',
+            lead_source: heardAbout || 'Online Booking Form',
+            service_type: serviceType,
+            cleaners_count: crewRuleDetails.cleaners,
+            estimated_value: estValue,
+            currency: 'CAD',
+            quote_number: data?.quoteNumber || '',
+          });
+          triggerGoogleAdsConversion(estValue, 'CAD');
+          sessionStorage.setItem(
+            'tidyups_last_completed_booking',
+            JSON.stringify({
+              customerName: fullNameCombined,
+              firstName: firstName.trim(),
+              lastName: lastName.trim(),
+              customerPhone: phone.trim(),
+              customerEmail: email.trim(),
+              serviceType,
+              hoursLabel: crewRuleDetails.badgeText,
+              address: address.trim(),
+              city,
+              bedrooms,
+              bathrooms,
+              preferredDateLabel: preferredDate,
+              preferredTime,
+              totalAmount: estValue,
+              bookingId: data?.jobberJobId || '',
+              quoteNumber: data?.quoteNumber || '',
+              submittedAt: new Date().toISOString(),
+            })
+          );
+          if (mode === 'STANDALONE_PAGE') {
+            window.history.pushState({}, '', '/thank-you');
+          }
+        } catch {
+          // ignore dataLayer notice
+        }
+        setCreatedSummary(data);
+        if (onBookingCreated && data.ticket) {
+          onBookingCreated(data.ticket, data);
+        }
+        setStep('SUCCESS');
+      } else {
+        setErrorMsg(data.error || 'Unable to submit booking request. Please try again.');
+      }
+    } catch {
+      setErrorMsg('Network connection error. Please check your connection and try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleReset = () => {
+    setStep('FORM');
+    setFirstName('');
+    setLastName('');
+    setPhone('');
+    setEmail('');
+    setAddress('');
+    setSpecialInstructions('');
+    setVoiceCapturedFields({});
+    if (mode === 'MODAL' && onClose) {
+      onClose();
+    }
+  };
+
+  const formCardContent = (
+    <div
+      className={`w-full ${
+        mode === 'STANDALONE_PAGE' ? 'max-w-4xl mx-auto' : 'max-w-3xl'
+      } bg-slate-950 border-2 ${
+        selectedOptionTheme
+          ? serviceType === 'Move-Out Cleaning'
+            ? 'border-sky-400 shadow-[0_0_50px_rgba(24,119,242,0.35)]'
+            : serviceType === 'Basic Cleaning'
+            ? 'border-emerald-400 shadow-[0_0_50px_rgba(15,157,88,0.35)]'
+            : 'border-purple-400 shadow-[0_0_50px_rgba(124,58,237,0.35)]'
+          : 'border-sky-500/70 shadow-[0_0_50px_rgba(56,189,248,0.25)]'
+      } rounded-3xl overflow-hidden text-white font-sans transition-all duration-300 ${
+        mode === 'MODAL' ? 'max-h-[94vh] flex flex-col' : ''
+      }`}
+    >
+      {/* Top 3-Color Master Sheet Ribbon Strip (Blue Move-Out • Green Basic • Purple Deep Clean) */}
+      <div
+        className={`h-2.5 ${
+          selectedOptionTheme
+            ? selectedOptionTheme.topBarClass
+            : 'bg-gradient-to-r from-[#1877F2] via-[#0F9D58] to-[#7C3AED]'
+        }`}
+      />
+
+      {/* Top Header with TidyUps Bunny Mascot Logo & Multi-Color Service Highlights */}
+      <div className="p-5 sm:p-6 border-b border-slate-800 bg-gradient-to-r from-slate-950 via-indigo-950/90 to-slate-900 text-white flex items-center justify-between gap-4 flex-shrink-0">
+        <div className="flex items-center gap-4">
+          <TidyUpsBunnyLogo size="lg" />
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="px-3 py-0.5 rounded-full bg-gradient-to-r from-[#1877F2] via-teal-600 to-[#7C3AED] text-white text-[10px] font-black uppercase tracking-wider shadow-sm">
+                🐰 TidyUps Bunny Voice &amp; Online Booking
+              </span>
+              <span className="text-[11px] text-sky-300 font-mono font-bold">
+                app.tidyupscleaning.com/booking
+              </span>
+            </div>
+            <h2 className="font-black text-xl sm:text-2xl text-white mt-1 tracking-tight">
+              TidyUps Cleaning —{' '}
+              <span className="text-sky-400 underline decoration-sky-500/60 decoration-2 underline-offset-4">
+                Move-Out
+              </span>
+              ,{' '}
+              <span className="text-emerald-400 underline decoration-emerald-500/60 decoration-2 underline-offset-4">
+                Basic
+              </span>{' '}
+              &amp;{' '}
+              <span className="text-purple-400 underline decoration-purple-500/60 decoration-2 underline-offset-4">
+                Deep Clean
+              </span>
+            </h2>
+            <p className="text-xs text-slate-300 mt-0.5">
+              Pick one of our <strong className="text-sky-300">3 color-coded cleaning tiers</strong> or speak your details — watch each box <strong className="text-emerald-400">light up</strong>!
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          {step === 'FORM' && (
+            <button
+              type="button"
+              onClick={handleClearSheet}
+              className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-amber-600 border-2 border-amber-500/60 text-amber-200 hover:text-white text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
+              title="Clear all fields and start over with a blank booking sheet"
+              data-testid="button-start-over-top"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>Start Over / Clear Sheet</span>
+            </button>
+          )}
+          {mode === 'MODAL' && onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Form Body */}
+      <div className={`p-5 sm:p-7 ${mode === 'MODAL' ? 'flex-1 overflow-y-auto' : ''} bg-gradient-to-b from-slate-950 via-[#0B1120] to-slate-950 space-y-6`}>
+        {step === 'FORM' ? (
+          <form onSubmit={handleSubmit} className="space-y-6">
+            {/* TidyUps Bunny Wrapped SUV Banner */}
+            <div className="relative rounded-2xl overflow-hidden border-2 border-sky-500/50 shadow-lg bg-slate-900">
+              <img
+                src="/assets/aistudio/39x14_ver_0001__1__d4ddd987.png"
+                alt="TidyUps Cleaning Bunny Wrapped Fleet"
+                className="w-full h-28 sm:h-36 object-cover object-center"
+              />
+              <div className="absolute inset-0 bg-gradient-to-r from-slate-950/90 via-slate-950/45 to-transparent flex items-center px-4 sm:px-6">
+                <div className="max-w-md space-y-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="px-2.5 py-0.5 rounded-md bg-[#1877F2] text-white text-[10px] font-black uppercase tracking-wider shadow-xs">
+                      Move-Out
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-md bg-[#0F9D58] text-white text-[10px] font-black uppercase tracking-wider shadow-xs">
+                      Basic Clean
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-md bg-[#7C3AED] text-white text-[10px] font-black uppercase tracking-wider shadow-xs">
+                      Deep Clean
+                    </span>
+                  </div>
+                  <p className="text-xs sm:text-sm font-black text-white drop-shadow">
+                    All Supplies, Commercial HEPA Vacuums &amp; 24-Hour Clean Guarantee Included
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* ─────────────────────────────────────────────────────────────────
+                CONTINUOUS VOICE DICTATION BAR (SKY BLUE & INDIGO TECH THEME)
+               ───────────────────────────────────────────────────────────────── */}
+            <div
+              className={`p-4 sm:p-5 rounded-2xl border-2 transition-all ${
+                isRecordingVoice
+                  ? 'border-cyan-400 bg-gradient-to-r from-sky-950/95 via-indigo-950/90 to-slate-950 ring-4 ring-cyan-500/30 shadow-[0_0_30px_rgba(6,182,212,0.45)]'
+                  : 'border-sky-500/60 bg-gradient-to-r from-slate-900 via-sky-950/40 to-indigo-950/40'
+              }`}
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-start sm:items-center gap-3">
+                  <div
+                    className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-md ${
+                      isRecordingVoice
+                        ? 'bg-cyan-500 text-slate-950 animate-pulse'
+                        : 'bg-gradient-to-br from-sky-500 to-indigo-600 text-white'
+                    }`}
+                  >
+                    {isRecordingVoice ? <Volume2 className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs sm:text-sm font-black text-white">
+                        🎙️ Continuous Voice Fill — Speak Your Details &amp; Watch the Boxes Light Up!
+                      </span>
+                      {isRecordingVoice && (
+                        <span className="px-2 py-0.5 rounded-full bg-cyan-500 text-slate-950 text-[10px] font-black uppercase animate-pulse">
+                          ● Live Continuous Mic (Won&apos;t Stop on Pause)
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-sky-200/90 mt-0.5">
+                      Click <strong>Start Voice Mic</strong> and speak naturally at your own pace. Pausing won&apos;t shut off the mic — click <strong>Stop Mic</strong> only when you&apos;re done!
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleToggleContinuousMic}
+                    className={`px-4 py-2.5 rounded-xl text-xs font-black flex items-center gap-2 cursor-pointer shadow-lg transition-all ${
+                      isRecordingVoice
+                        ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 ring-2 ring-white/50'
+                        : 'bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white'
+                    }`}
+                  >
+                    {isRecordingVoice ? (
+                      <>
+                        <MicOff className="w-4 h-4" />
+                        <span>Stop Mic</span>
+                      </>
+                    ) : (
+                      <>
+                        <Mic className="w-4 h-4" />
+                        <span>Start Voice Mic</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isParsingVoice || !voiceTranscript.trim()}
+                    onClick={() => handleServerVoiceParse(voiceTranscript)}
+                    className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-indigo-600 disabled:opacity-40 border border-sky-400/50 text-white text-xs font-black flex items-center gap-1.5 cursor-pointer transition-all"
+                  >
+                    <Wand2 className="w-3.5 h-3.5 text-sky-400" />
+                    <span>{isParsingVoice ? 'Lighting Boxes...' : 'Light Up Boxes'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleClearSheet}
+                    className="px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-amber-600 border border-amber-500/60 text-amber-200 hover:text-white text-xs font-black flex items-center gap-1.5 cursor-pointer transition-all"
+                    title="Clear all form boxes and start over from scratch"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Start Over / Clear Sheet</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-3">
+                <input
+                  type="text"
+                  value={
+                    interimTranscript
+                      ? `${voiceTranscript} ${interimTranscript}`.trim()
+                      : voiceTranscript
+                  }
+                  onChange={(e) => {
+                    setVoiceTranscript(e.target.value);
+                    latestTranscriptRef.current = e.target.value;
+                    applyLiveSpeechExtraction(e.target.value);
+                  }}
+                  placeholder='Example: "My name is Sarah Jenkins, phone 780-555-0199, Move-Out Cleaning at 10420 98 Ave NW Edmonton, 3 bedrooms 2 bathrooms, 2 cleaners, tomorrow morning"'
+                  className="w-full px-3.5 py-2.5 bg-slate-950/90 border border-sky-500/40 rounded-xl text-xs text-white placeholder-slate-400 focus:outline-none focus:border-sky-400"
+                />
+              </div>
+
+              {voiceStatusMsg && (
+                <p className="mt-2 text-[11px] font-black text-emerald-400 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                  <span>{voiceStatusMsg}</span>
+                </p>
+              )}
+            </div>
+
+            {/* ─────────────────────────────────────────────────────────────────
+                LIVE BOX LIGHTING PROGRESS BAR (Shows which boxes are filled in)
+               ───────────────────────────────────────────────────────────────── */}
+            <div className="p-3.5 rounded-2xl bg-slate-900/95 border border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-[11px] font-black uppercase tracking-wider text-sky-300 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Live Form Box Status — Boxes Light Up Emerald Green When Filled!</span>
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleClearSheet}
+                    className="px-2.5 py-1 rounded-full bg-slate-950 hover:bg-amber-600 border border-amber-500/60 text-amber-300 hover:text-white text-[11px] font-black flex items-center gap-1 cursor-pointer transition-all"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>Clear Sheet / Start Over</span>
+                  </button>
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full text-xs font-black ${
+                      filledRequiredCount === requiredBoxesStatus.length
+                        ? 'bg-emerald-500 text-slate-950 shadow-[0_0_12px_rgba(16,185,129,0.5)]'
+                        : 'bg-sky-600 text-white'
+                    }`}
+                  >
+                    {filledRequiredCount} / {requiredBoxesStatus.length} Required Boxes Lit Up ✓
+                  </span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                {requiredBoxesStatus.map((b) => (
+                  <div
+                    key={b.key}
+                    className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-black flex items-center justify-between gap-1.5 transition-all ${
+                      b.filled
+                        ? 'bg-emerald-950/70 border-emerald-400 text-emerald-300 shadow-[0_0_10px_rgba(16,185,129,0.2)]'
+                        : 'bg-slate-950 border-slate-800 text-slate-400'
+                    }`}
+                  >
+                    <span className="truncate">{b.label}</span>
+                    {b.filled ? (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    ) : (
+                      <span className="w-2 h-2 rounded-full bg-amber-400/70 shrink-0" />
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {errorMsg && (
+              <div className="p-3.5 bg-amber-950/90 border-2 border-amber-500 rounded-2xl text-amber-100 text-xs font-bold">
+                {errorMsg}
+              </div>
+            )}
+
+            {/* 1. Three Color-Coded Options: Move-Out (Blue), Basic (Green), Deep (Purple) */}
+            <div className={`p-4 sm:p-5 rounded-2xl border-2 ${getLitBoxClass('serviceType', Boolean(serviceType))}`}>
+              <div className="flex items-center justify-between mb-3.5 flex-wrap gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <label className="block text-xs sm:text-sm font-black text-white uppercase tracking-wider">
+                    1. Choose Your Cleaning Package (3 Color-Coded Tiers) *
+                  </label>
+                  <div className="hidden sm:flex items-center gap-1.5 text-[10px] font-black">
+                    <span className="px-2 py-0.5 rounded-full bg-[#1877F2]/25 border border-sky-400/50 text-sky-300">
+                      🔵 Move-Out
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-[#0F9D58]/25 border border-emerald-400/50 text-emerald-300">
+                      🟢 Basic
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-[#7C3AED]/25 border border-purple-400/50 text-purple-300">
+                      🟣 Deep Clean
+                    </span>
+                  </div>
+                </div>
+                {renderLitBadge('serviceType', Boolean(serviceType), true)}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                {THREE_BOOKING_OPTIONS.map((opt) => {
+                  const isSelected = serviceType === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => {
+                        setServiceType(opt.id);
+                        triggerFieldHighlight('serviceType');
+                      }}
+                      className={`relative overflow-hidden p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex flex-col justify-between gap-2.5 ${
+                        isSelected ? opt.selectedCardClass : opt.unselectedCardClass
+                      }`}
+                    >
+                      {/* Distinct Top Color Strip per Service (Blue / Green / Purple) */}
+                      <div className={`absolute top-0 left-0 right-0 h-1.5 ${opt.topBarClass}`} />
+
+                      <div className="pt-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-black/40 border border-white/15 text-white">
+                            {opt.colorTag}
+                          </span>
+                          {isSelected ? (
+                            <CheckCircle2 className={`w-5 h-5 ${opt.checkIconClass} shrink-0`} />
+                          ) : (
+                            <div className="w-5 h-5 rounded-full border-2 border-slate-500 shrink-0" />
+                          )}
+                        </div>
+                        <div className="text-lg font-black text-white mt-2">
+                          {opt.shortLabel}
+                        </div>
+                        <div className={`text-xs font-extrabold ${opt.titleTextClass} mt-0.5`}>
+                          {opt.title}
+                        </div>
+                        <span
+                          className={`inline-block mt-2 px-2.5 py-0.5 rounded-lg text-[10px] font-black ${
+                            isSelected ? opt.selectedPillBadgeClass : opt.pillBadgeClass
+                          }`}
+                        >
+                          {opt.badge}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-200 leading-relaxed mt-1">
+                        {opt.description}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Cleaner Crew & Minimum Hours Rule Selector */}
+              {serviceType && (
+                <div className="mt-4 pt-4 border-t border-slate-800">
+                  <div className="flex items-center justify-between mb-2.5 flex-wrap gap-2">
+                    <span className="text-xs font-black text-sky-300 flex items-center gap-1.5">
+                      <Users className="w-4 h-4 text-emerald-400" />
+                      <span>Cleaner Crew &amp; Minimum Hours Rule ({serviceType}):</span>
+                    </span>
+                    <span
+                      className={`px-3 py-0.5 rounded-full text-white text-[10px] font-black uppercase shadow-xs ${
+                        serviceType === 'Move-Out Cleaning'
+                          ? 'bg-[#1877F2]'
+                          : serviceType === 'Basic Cleaning'
+                          ? 'bg-[#0F9D58]'
+                          : 'bg-[#7C3AED]'
+                      }`}
+                    >
+                      {crewRuleDetails.badgeText}
+                    </span>
+                  </div>
+
+                  {serviceType === 'Basic Cleaning' && (
+                    <div className="p-3.5 rounded-xl bg-emerald-950/40 border-2 border-emerald-500/60 flex items-center justify-between text-xs">
+                      <div>
+                        <span className="font-black text-white">👤 1 Professional Cleaner ($52.50/hr)</span>
+                        <p className="text-[11px] text-emerald-200/90 mt-0.5">
+                          Basic Cleaning is scheduled with 1 dedicated TidyUps cleaner.
+                        </p>
+                      </div>
+                      <span className="px-2.5 py-1 rounded-lg bg-[#0F9D58] text-white font-black text-[11px]">
+                        ✓ 1 Cleaner Active
+                      </span>
+                    </div>
+                  )}
+
+                  {serviceType === 'Deep Cleaning' && (
+                    <div className="p-3.5 rounded-xl bg-purple-950/40 border-2 border-purple-500/60 flex items-center justify-between text-xs">
+                      <div>
+                        <span className="font-black text-white">👥 2 Professional Cleaners — Minimum 2 Hours ($105.00/hr)</span>
+                        <p className="text-[11px] text-purple-200/90 mt-0.5">
+                          Deep Cleaning requires a minimum of 2 cleaners for 2+ hours ($210.00+ base).
+                        </p>
+                      </div>
+                      <span className="px-2.5 py-1 rounded-lg bg-[#7C3AED] text-white font-black text-[11px]">
+                        ✓ 2 Cleaners (Min 2 Hrs)
+                      </span>
+                    </div>
+                  )}
+
+                  {serviceType === 'Move-Out Cleaning' && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCleanerCount(2);
+                          triggerFieldHighlight('cleanerCount');
+                        }}
+                        className={`p-3 rounded-xl border-2 text-left transition-all cursor-pointer ${
+                          cleanerCount === 2
+                            ? 'border-sky-400 bg-blue-950/70 text-white shadow-md ring-1 ring-sky-400/40'
+                            : 'border-slate-800 bg-slate-950 text-slate-400 hover:border-sky-500/50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-black text-white">👥 2 Cleaners (Recommended)</span>
+                          {cleanerCount === 2 && <CheckCircle2 className="w-4 h-4 text-sky-400" />}
+                        </div>
+                        <div className="text-[11px] font-bold text-sky-300 mt-0.5">
+                          Minimum 3 Hours @ $105.00/hr ($315.00+)
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCleanerCount(1);
+                          triggerFieldHighlight('cleanerCount');
+                        }}
+                        className={`p-3 rounded-xl border-2 text-left transition-all cursor-pointer ${
+                          cleanerCount === 1
+                            ? 'border-sky-400 bg-blue-950/70 text-white shadow-md ring-1 ring-sky-400/40'
+                            : 'border-slate-800 bg-slate-950 text-slate-400 hover:border-sky-500/50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-black text-white">👤 1 Cleaner (Solo Move-Out)</span>
+                          {cleanerCount === 1 && <CheckCircle2 className="w-4 h-4 text-sky-400" />}
+                        </div>
+                        <div className="text-[11px] font-bold text-amber-300 mt-0.5">
+                          Starts at 6 Hours Minimum @ $52.50/hr ($315.00+)
+                        </div>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* 2. Split Customer Name (First Name + Last Name) & Contact Boxes */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="w-6 h-6 rounded-lg bg-emerald-500/20 border border-emerald-400/50 flex items-center justify-center text-emerald-300">
+                  <User className="w-3.5 h-3.5" />
+                </span>
+                <span className="text-xs sm:text-sm font-black text-emerald-300 uppercase tracking-wider">
+                  2. Your Name &amp; Contact Information (Each Box Lights Up When Filled)
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                {/* FIRST NAME BOX */}
+                <div className={`p-3.5 rounded-2xl border-2 ${getLitBoxClass('firstName', Boolean(firstName.trim()))}`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-black text-white">First Name *</label>
+                    {renderLitBadge('firstName', Boolean(firstName.trim()), true)}
+                  </div>
+                  <input
+                    type="text"
+                    required
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    placeholder="e.g. Sarah"
+                    className="w-full px-3.5 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white placeholder-slate-500 focus:outline-none focus:border-sky-400"
+                  />
+                </div>
+
+                {/* LAST NAME BOX */}
+                <div className={`p-3.5 rounded-2xl border-2 ${getLitBoxClass('lastName', Boolean(lastName.trim()))}`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-black text-white">Last Name *</label>
+                    {renderLitBadge('lastName', Boolean(lastName.trim()), true)}
+                  </div>
+                  <input
+                    type="text"
+                    required
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                    placeholder="e.g. Jenkins"
+                    className="w-full px-3.5 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white placeholder-slate-500 focus:outline-none focus:border-sky-400"
+                  />
+                </div>
+
+                {/* MOBILE PHONE BOX */}
+                <div className={`p-3.5 rounded-2xl border-2 ${getLitBoxClass('phone', Boolean(phone.trim()))}`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-black text-white">Mobile Number (For Quote) *</label>
+                    {renderLitBadge('phone', Boolean(phone.trim()), true)}
+                  </div>
+                  <input
+                    type="tel"
+                    required
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="e.g. (780) 555-0199"
+                    className="w-full px-3.5 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white placeholder-slate-500 focus:outline-none focus:border-sky-400"
+                  />
+                </div>
+
+                {/* EMAIL BOX */}
+                <div className={`p-3.5 rounded-2xl border-2 ${getLitBoxClass('email', Boolean(email.trim()))}`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-black text-white">Email Address (For Official Quote)</label>
+                    {renderLitBadge('email', Boolean(email.trim()), false)}
+                  </div>
+                  <div className="relative">
+                    <Mail className="w-3.5 h-3.5 text-sky-400 absolute left-3 top-3" />
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="sarah@example.com"
+                      className="w-full pl-9 pr-3.5 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white placeholder-slate-500 focus:outline-none focus:border-sky-400"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 3. Property Address, Home Size & Preferred Date */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="w-6 h-6 rounded-lg bg-amber-500/20 border border-amber-400/50 flex items-center justify-center text-amber-300">
+                  <Home className="w-3.5 h-3.5" />
+                </span>
+                <span className="text-xs sm:text-sm font-black text-amber-300 uppercase tracking-wider">
+                  3. Property Address, Home Size &amp; Preferred Date
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3.5">
+                {/* STREET ADDRESS BOX */}
+                <div className={`sm:col-span-8 p-3.5 rounded-2xl border-2 ${getLitBoxClass('address', Boolean(address.trim()))}`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-black text-white">
+                      Property Street Address (Edmonton &amp; Area) *
+                    </label>
+                    {renderLitBadge('address', Boolean(address.trim()), true)}
+                  </div>
+                  <AddressAutocompleteInput
+                    required
+                    theme="dark"
+                    value={address}
+                    onChange={(newAddr) => {
+                      setAddress(newAddr);
+                      triggerFieldHighlight('address');
+                      const lower = newAddr.toLowerCase();
+                      if (lower.includes('st. albert') || lower.includes('st albert')) { setCity('St. Albert'); triggerFieldHighlight('city'); }
+                      else if (lower.includes('sherwood park')) { setCity('Sherwood Park'); triggerFieldHighlight('city'); }
+                      else if (lower.includes('leduc')) { setCity('Leduc'); triggerFieldHighlight('city'); }
+                      else if (lower.includes('spruce grove')) { setCity('Spruce Grove'); triggerFieldHighlight('city'); }
+                      else if (lower.includes('beaumont')) { setCity('Beaumont'); triggerFieldHighlight('city'); }
+                      else if (lower.includes('fort saskatchewan')) { setCity('Fort Saskatchewan'); triggerFieldHighlight('city'); }
+                      else if (lower.includes('edmonton')) { setCity('Edmonton'); triggerFieldHighlight('city'); }
+                    }}
+                    placeholder="Start typing house #, street, or neighborhood (auto-completes)..."
+                    className="px-3.5 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white placeholder-slate-500 focus:outline-none focus:border-sky-400"
+                  />
+                </div>
+
+                {/* CITY BOX */}
+                <div className={`sm:col-span-4 p-3.5 rounded-2xl border-2 ${getLitBoxClass('city', Boolean(city))}`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-black text-white">City / Community</label>
+                    {renderLitBadge('city', Boolean(city), false)}
+                  </div>
+                  <select
+                    value={city}
+                    onChange={(e) => setCity(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:border-sky-400"
+                  >
+                    <option value="">Select City / Community...</option>
+                    <option value="Edmonton">Edmonton</option>
+                    <option value="St. Albert">St. Albert</option>
+                    <option value="Sherwood Park">Sherwood Park</option>
+                    <option value="Spruce Grove">Spruce Grove</option>
+                    <option value="Leduc">Leduc</option>
+                    <option value="Beaumont">Beaumont</option>
+                    <option value="Fort Saskatchewan">Fort Saskatchewan</option>
+                    <option value="Stony Plain">Stony Plain</option>
+                  </select>
+                </div>
+
+                {/* BEDROOMS BOX */}
+                <div className={`sm:col-span-6 p-3.5 rounded-2xl border-2 ${getLitBoxClass('bedrooms', Boolean(bedrooms))}`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-black text-white">Bedrooms / Property Size *</label>
+                    {renderLitBadge('bedrooms', Boolean(bedrooms), true)}
+                  </div>
+                  <select
+                    required
+                    value={bedrooms}
+                    onChange={(e) => setBedrooms(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:border-sky-400"
+                  >
+                    <option value="">Select Bedrooms / Property Size...</option>
+                    <option value="1 Bedroom">1 Bedroom / Condo / Apartment</option>
+                    <option value="2 Bedrooms">2 Bedrooms</option>
+                    <option value="3 Bedrooms">3 Bedrooms</option>
+                    <option value="4 Bedrooms">4 Bedrooms</option>
+                    <option value="5 Bedrooms">5 Bedrooms</option>
+                    <option value="6 Bedrooms">6+ Bedrooms</option>
+                  </select>
+                </div>
+
+                {/* BATHROOMS BOX */}
+                <div className={`sm:col-span-6 p-3.5 rounded-2xl border-2 ${getLitBoxClass('bathrooms', Boolean(bathrooms))}`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-black text-white">Bathrooms *</label>
+                    {renderLitBadge('bathrooms', Boolean(bathrooms), true)}
+                  </div>
+                  <select
+                    required
+                    value={bathrooms}
+                    onChange={(e) => setBathrooms(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:border-sky-400"
+                  >
+                    <option value="">Select Bathrooms...</option>
+                    <option value="1 Bathroom">1 Bathroom</option>
+                    <option value="1.5 Bathrooms">1.5 Bathrooms</option>
+                    <option value="2 Bathrooms">2 Bathrooms</option>
+                    <option value="2.5 Bathrooms">2.5 Bathrooms</option>
+                    <option value="3 Bathrooms">3 Bathrooms</option>
+                    <option value="3.5 Bathrooms">3.5 Bathrooms</option>
+                    <option value="4 Bathrooms">4+ Bathrooms</option>
+                  </select>
+                </div>
+
+                {/* PREFERRED DATE BOX */}
+                <div className={`sm:col-span-6 p-3.5 rounded-2xl border-2 ${getLitBoxClass('preferredDate', Boolean(preferredDate))}`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-black text-white flex items-center gap-1">
+                      <Calendar className="w-3.5 h-3.5 text-sky-400" />
+                      <span>Preferred Cleaning Date *</span>
+                    </label>
+                    {renderLitBadge('preferredDate', Boolean(preferredDate), true)}
+                  </div>
+                  <input
+                    type="date"
+                    required
+                    value={preferredDate}
+                    onChange={(e) => setPreferredDate(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:border-sky-400"
+                  />
+                </div>
+
+                {/* PREFERRED TIME WINDOW BOX */}
+                <div className={`sm:col-span-6 p-3.5 rounded-2xl border-2 ${getLitBoxClass('preferredTime', Boolean(preferredTime))}`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-black text-white flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Preferred Time Window</span>
+                    </label>
+                    {renderLitBadge('preferredTime', Boolean(preferredTime), false)}
+                  </div>
+                  <select
+                    value={preferredTime}
+                    onChange={(e) => setPreferredTime(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:border-sky-400"
+                  >
+                    <option value="">Select Preferred Time Window...</option>
+                    <option value="Morning (8:00 AM - 12:00 PM)">Morning (8:00 AM - 12:00 PM)</option>
+                    <option value="Afternoon (12:00 PM - 4:00 PM)">Afternoon (12:00 PM - 4:00 PM)</option>
+                    <option value="Flexible / Any Time">Flexible / Earliest Available</option>
+                  </select>
+                </div>
+
+                {/* HOW DID YOU HEAR ABOUT US BOX (Auto-selects Facebook or Google Ad when clicked from an ad) */}
+                <div className="sm:col-span-6 p-3.5 rounded-2xl border-2 border-slate-800 bg-slate-900/90">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-black text-white">How Did You Hear About Us?</label>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-sky-500/20 border border-sky-400/50 text-sky-300 text-[10px] font-bold">
+                      Auto-Detected ✓
+                    </span>
+                  </div>
+                  <select
+                    value={heardAbout}
+                    onChange={(e) => setHeardAbout(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:border-sky-400"
+                  >
+                    <option value="Google Search / Ad">Google Search / Ad</option>
+                    <option value="Google Search / Ad (Campaign 2)">Google Search / Ad (Campaign 2)</option>
+                    <option value="Facebook / Instagram Ad">Facebook / Instagram Ad</option>
+                    <option value="Facebook Ad (Campaign 2)">Facebook Ad (Campaign 2)</option>
+                    <option value="Website (app.tidyupscleaning.com/booking)">Website (tidyupscleaning.com / app.tidyupscleaning.com/booking)</option>
+                    <option value="Friend / Family Referral">Friend / Family / Realtor Referral</option>
+                    <option value="Repeat TidyUps Client">Repeat TidyUps Client</option>
+                  </select>
+                </div>
+
+                {/* SPECIAL INSTRUCTIONS BOX */}
+                <div
+                  className={`sm:col-span-6 p-3.5 rounded-2xl border-2 ${getLitBoxClass(
+                    'specialInstructions',
+                    Boolean(specialInstructions.trim())
+                  )}`}
+                >
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-black text-white">
+                      Special Requests (Appliances, Basement, Pets, Lockbox)
+                    </label>
+                    {renderLitBadge('specialInstructions', Boolean(specialInstructions.trim()), false)}
+                  </div>
+                  <textarea
+                    rows={2}
+                    value={specialInstructions}
+                    onChange={(e) => setSpecialInstructions(e.target.value)}
+                    placeholder="e.g. Main floor + basement, inside oven & fridge needed, key in lockbox..."
+                    className="w-full px-3.5 py-2 bg-slate-950/90 border border-slate-700 rounded-xl text-xs font-medium text-white placeholder-slate-500 focus:outline-none focus:border-sky-400"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Submit & Start Over / Clear Sheet Buttons */}
+            <div className="space-y-2.5 pt-1">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className={`flex-1 py-4 px-6 bg-gradient-to-r ${
+                    selectedOptionTheme
+                      ? selectedOptionTheme.buttonGradientClass
+                      : 'from-[#1877F2] via-[#0F9D58] to-[#7C3AED] hover:opacity-95 shadow-[0_0_25px_rgba(24,119,242,0.4)]'
+                  } text-white rounded-2xl text-sm sm:text-base font-black flex items-center justify-center gap-2.5 transition-all cursor-pointer disabled:opacity-50`}
+                >
+                  {isSubmitting ? (
+                    <span>Submitting Your Booking &amp; Creating Jobber Quote...</span>
+                  ) : (
+                    <>
+                      <Sparkles className="w-5 h-5" />
+                      <span>
+                        Submit {serviceType || 'Cleaning'} {serviceType ? `(${crewRuleDetails.cleaners} Cleaner${crewRuleDetails.cleaners > 1 ? 's' : ''})` : ''} Request
+                      </span>
+                      <ArrowRight className="w-5 h-5" />
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearSheet}
+                  className="py-4 px-5 rounded-2xl bg-slate-900 hover:bg-amber-600 border-2 border-amber-500/60 text-amber-200 hover:text-white text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all cursor-pointer shrink-0"
+                  title="Clear all boxes and start over from scratch"
+                  data-testid="button-start-over-bottom"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>Start Over / Clear Sheet</span>
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-3 text-[11px] text-slate-400 font-semibold">
+                <span className="flex items-center gap-1 text-emerald-400">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>No Upfront Card Charge Today</span>
+                </span>
+                <span>•</span>
+                <span className="text-sky-300">24-Hour Clean Guarantee</span>
+                <span>•</span>
+                <a
+                  href="mailto:booking@tidyupscleaning.com"
+                  className="text-purple-300 hover:underline font-bold"
+                >
+                  booking@tidyupscleaning.com
+                </a>
+              </div>
+            </div>
+          </form>
+        ) : (
+          /* SUCCESS STATE */
+          <div className="text-center py-8 space-y-5">
+            <div className="flex justify-center">
+              <TidyUpsBunnyLogo size="lg" />
+            </div>
+
+            <div className="space-y-2">
+              <span className="inline-block px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-400 text-emerald-300 text-xs font-black uppercase">
+                ✓ Form Completed &amp; Jobber Quote Created
+              </span>
+              <h3 className="text-2xl sm:text-3xl font-black text-white">
+                Thank you{firstName ? `, ${firstName},` : ''} for completing the form!
+              </h3>
+              <p className="text-base sm:text-lg font-extrabold text-sky-400 max-w-md mx-auto">
+                A team member will be in contact with you shortly.
+              </p>
+              <p className="text-xs sm:text-sm text-slate-300 max-w-md mx-auto">
+                Your <strong>{serviceType}</strong> request has been received and logged in Jobber. We will review your home details and send your confirmation to <strong>{phone}</strong>
+                {email ? ` and ${email}` : ''}.
+              </p>
+            </div>
+
+            <div className="bg-slate-900 p-5 rounded-2xl border-2 border-sky-500/60 max-w-md mx-auto text-left text-xs space-y-2.5 shadow-lg">
+              <div className="flex justify-between border-b border-slate-800 pb-2">
+                <span className="text-slate-400 font-bold">Client Name:</span>
+                <span className="font-black text-white">
+                  {firstName} {lastName}
+                </span>
+              </div>
+              <div className="flex justify-between border-b border-slate-800 pb-2">
+                <span className="text-slate-400 font-bold">Cleaning Service:</span>
+                <span className="font-black text-sky-400">{serviceType}</span>
+              </div>
+              <div className="flex justify-between border-b border-slate-800 pb-2">
+                <span className="text-slate-400 font-bold">Crew &amp; Minimum Hours:</span>
+                <span className="font-bold text-emerald-300">{crewRuleDetails.badgeText}</span>
+              </div>
+              <div className="flex justify-between border-b border-slate-800 pb-2">
+                <span className="text-slate-400 font-bold">Home Size:</span>
+                <span className="font-bold text-white">
+                  {bedrooms} • {bathrooms}
+                </span>
+              </div>
+              <div className="flex justify-between border-b border-slate-800 pb-2">
+                <span className="text-slate-400 font-bold">Property Address:</span>
+                <span className="font-bold text-white text-right">
+                  {address}, {city}
+                </span>
+              </div>
+              <div className="flex justify-between border-b border-slate-800 pb-2">
+                <span className="text-slate-400 font-bold">Preferred Date:</span>
+                <span className="font-bold text-emerald-400">
+                  {preferredDate} • {preferredTime}
+                </span>
+              </div>
+              <div className="flex justify-between pt-0.5">
+                <span className="text-slate-400 font-bold">Reference Number:</span>
+                <span className="font-black font-mono text-sky-400">
+                  {createdSummary?.quoteNumber || 'QT-4510'} / #{createdSummary?.jobberJobId || 'JOB-94182'}
+                </span>
+              </div>
+            </div>
+
+            <div className="pt-3 flex flex-wrap justify-center gap-3">
+              <button
+                type="button"
+                onClick={handleReset}
+                className="px-6 py-3 bg-gradient-to-r from-[#1877F2] to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-black transition-colors cursor-pointer shadow-md"
+              >
+                {mode === 'MODAL' ? 'Done' : 'Submit Another Request'}
+              </button>
+              <a
+                href="https://tidyupscleaning.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-5 py-3 rounded-xl border-2 border-sky-500/60 hover:border-sky-400 text-white text-xs font-black flex items-center gap-1.5"
+              >
+                <span>Visit tidyupscleaning.com</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  if (mode === 'STANDALONE_PAGE' && step === 'SUCCESS') {
+    return (
+      <ThankYouConversionPage
+        isOwnerPreview={isOwnerViewing}
+        bookingReceipt={{
+          customerName: `${firstName} ${lastName}`.trim(),
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          customerPhone: phone.trim(),
+          customerEmail: email.trim(),
+          serviceType: serviceType || 'Residential Cleaning',
+          hoursLabel: crewRuleDetails.badgeText,
+          address: address.trim(),
+          city,
+          bedrooms,
+          bathrooms,
+          preferredDateLabel: preferredDate,
+          preferredTime,
+          totalAmount: createdSummary?.quote?.total || undefined,
+          bookingId: createdSummary?.jobberJobId || '',
+          quoteNumber: createdSummary?.quoteNumber || ''
+        }}
+        onBookAnother={() => {
+          handleReset();
+          try {
+            window.history.pushState({}, '', '/booking');
+          } catch {}
+        }}
+      />
+    );
+  }
+
+  if (mode === 'STANDALONE_PAGE') {
+    return (
+      <div className="min-h-screen w-full bg-gradient-to-br from-slate-950 via-[#091224] to-indigo-950 py-6 sm:py-10 px-4 text-white">
+        {/* Owner & Jess Ad Reconnection Bar (Only visible when Owner/Staff is logged in inside app.tidyupscleaning.com) */}
+        {isOwnerViewing && (
+          <div className="max-w-4xl mx-auto mb-4 bg-slate-900/95 text-white rounded-2xl border-2 border-sky-500/70 p-4 space-y-3 shadow-lg">
+            <div className="flex flex-wrap items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2 text-xs flex-wrap">
+                <span className="px-2.5 py-0.5 rounded-full bg-gradient-to-r from-[#1877F2] to-[#7C3AED] text-white font-black text-[10px] uppercase">
+                  👑 Jess &amp; Owner Ad Links
+                </span>
+                <span className="font-bold text-slate-200">
+                  Official Booking URL:{' '}
+                  <code className="text-sky-400 font-mono font-black">https://app.tidyupscleaning.com/booking</code>{' '}
+                  <span className="text-slate-400">(all <code className="text-emerald-300">tidyupscleaning.com/booking</code> links route here!)</span>
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleCopyBookingUrl('https://app.tidyupscleaning.com/booking', 'booking')
+                  }
+                  className="px-3 py-1.5 rounded-xl bg-[#1877F2] hover:bg-blue-500 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer"
+                >
+                  {copiedUrl === 'booking' ? (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Copied app.tidyupscleaning.com/booking!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copy Main /booking Link</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleCopyBookingUrl('https://app.tidyupscleaning.com/thank-you', 'thankyou')
+                  }
+                  className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer"
+                  title="Copy Primary Thank-You Page Link (https://app.tidyupscleaning.com/thank-you)"
+                >
+                  {copiedUrl === 'thankyou' ? (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Copied app.../thank-you!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copy app.../thank-you</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleCopyBookingUrl('https://ads.tidyupscleaning.com/thank-you', 'ads_thankyou')
+                  }
+                  className="px-3 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer"
+                  title="Copy Ads Thank-You Page Link (https://ads.tidyupscleaning.com/thank-you)"
+                >
+                  {copiedUrl === 'ads_thankyou' ? (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Copied ads.../thank-you!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copy ads.../thank-you</span>
+                    </>
+                  )}
+                </button>
+                {onPreviewThankYouPage && (
+                  <button
+                    type="button"
+                    onClick={onPreviewThankYouPage}
+                    className="px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-sm"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Preview /thank-you Page</span>
+                  </button>
+                )}
+                {onSwitchToCalculatorMode && (
+                  <button
+                    type="button"
+                    onClick={onSwitchToCalculatorMode}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-sky-500/40 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-sm"
+                  >
+                    <Calculator className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Switch to Quote Calculator View</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* 1-Click Campaign Links for Jess to Reconnect Facebook Ads 1 & 2, Google Ads 1 & 2, and Other Ads */}
+            <div className="pt-2.5 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+              <span className="text-slate-300 font-bold">
+                🔗 <strong>For Jess — 1-Click Ad Destination URLs</strong> (auto-routes each booking into its matching Google Sheet tab):
+              </span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {[
+                  { key: 'fb1', label: '🔵 Facebook Leads 1', url: 'https://app.tidyupscleaning.com/booking?source=fb1', cls: 'bg-[#1877F2] hover:bg-blue-500 text-white' },
+                  { key: 'fb2', label: '🔷 Facebook Leads 2', url: 'https://app.tidyupscleaning.com/booking?source=fb2', cls: 'bg-[#0A66C2] hover:bg-sky-500 text-white' },
+                  { key: 'gg1', label: '🟢 Google Leads 1', url: 'https://app.tidyupscleaning.com/booking?source=google1', cls: 'bg-[#0F9D58] hover:bg-emerald-500 text-white' },
+                  { key: 'gg2', label: '🌲 Google Leads 2', url: 'https://app.tidyupscleaning.com/booking?source=google2', cls: 'bg-[#0D9488] hover:bg-teal-500 text-white' },
+                  { key: 'oth', label: '🟠 Other Ads', url: 'https://app.tidyupscleaning.com/booking?source=other', cls: 'bg-[#D97706] hover:bg-amber-500 text-white' },
+                ].map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => handleCopyBookingUrl(item.url, item.key)}
+                    className={`px-2.5 py-1 rounded-lg font-black flex items-center gap-1 cursor-pointer transition-all ${item.cls}`}
+                    title={`Copy ${item.url}`}
+                  >
+                    {copiedUrl === item.key ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedUrl === item.key ? `Copied ${item.label}!` : item.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Direct Webhook URL & Shared Key for Google Ads & Facebook Ads */}
+            <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+              <span className="text-slate-300">
+                ⚡ <strong>Webhook URL (Google Ads &amp; Facebook Ads):</strong>{' '}
+                <code className="text-cyan-300 font-mono">https://app.tidyupscleaning.com/api/leads/webhook</code>{' '}
+                • <strong>Shared Key (Same for Both):</strong>{' '}
+                <code className="text-emerald-300 font-mono font-bold">tidyups-yeg-leads-2026</code>
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => handleCopyBookingUrl('https://app.tidyupscleaning.com/api/leads/webhook', 'webhook_url')}
+                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-cyan-500/40 text-cyan-200 font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  {copiedUrl === 'webhook_url' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedUrl === 'webhook_url' ? 'Copied Webhook URL!' : 'Copy Webhook URL'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCopyBookingUrl('tidyups-yeg-leads-2026', 'webhook_key')}
+                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-emerald-500/40 text-emerald-200 font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  {copiedUrl === 'webhook_key' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedUrl === 'webhook_key' ? 'Copied Shared Key!' : 'Copy Shared Key'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {formCardContent}
+
+        {/* Minimal Public Footer (No Phone Numbers) */}
+        <div className="max-w-4xl mx-auto mt-6 text-center text-xs text-slate-400 flex flex-wrap items-center justify-center gap-4">
+          <span>© {new Date().getFullYear()} TidyUps Cleaning Service Inc. • Edmonton &amp; Area</span>
+          <span>•</span>
+          <a
+            href="mailto:booking@tidyupscleaning.com"
+            className="text-sky-400 hover:underline font-bold"
+          >
+            booking@tidyupscleaning.com
+          </a>
+          <span>•</span>
+          <a
+            href="https://tidyupscleaning.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-emerald-400 hover:underline font-bold"
+          >
+            tidyupscleaning.com
+          </a>
+          {onOpenStaffLogin && !isOwnerViewing && (
+            <>
+              <span>•</span>
+              <button
+                type="button"
+                onClick={onOpenStaffLogin}
+                className="text-slate-500 hover:text-sky-400 underline cursor-pointer inline-flex items-center gap-1"
+              >
+                <Lock className="w-3 h-3" />
+                <span>Owner / Staff Login</span>
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-sm animate-fadeIn"
+      role="dialog"
+      aria-modal="true"
+    >
+      {formCardContent}
+    </div>
+  );
+};

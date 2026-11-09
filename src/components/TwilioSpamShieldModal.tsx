@@ -1,0 +1,3009 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  ShieldAlert,
+  ShieldCheck,
+  PhoneOff,
+  Globe,
+  Hash,
+  AlertTriangle,
+  CheckCircle2,
+  Trash2,
+  Plus,
+  RefreshCw,
+  Search,
+  Check,
+  X,
+  Phone,
+  PhoneCall,
+  Radio,
+  FileCode,
+  Copy,
+  Zap,
+  Clock,
+  ExternalLink,
+  Layers,
+  DollarSign,
+  Split,
+  Info,
+  HelpCircle,
+  ArrowRight,
+  TrendingDown
+} from 'lucide-react';
+import {
+  saveBlockedNumberToFirestore,
+  deleteBlockedNumberFromFirestore,
+  saveScreenedCallToFirestore,
+  fetchBlockedNumberRulesFromFirestore,
+} from '../services/firestoreSyncService';
+
+interface SpamShieldConfig {
+  enabled: boolean;
+  blockAllNonNorthAmerica: boolean;
+  blockedCountryCodes: string[];
+  blockedPrefixes: string[];
+  blockedNumbers: string[];
+  blockRobocallFloods?: boolean;
+  rejectionAction?: 'busy' | 'rejected';
+  forwardDestinationNumber?: string;
+  callerIdMode?: 'caller' | 'line';
+  lineMappings?: Record<string, string>;
+}
+
+interface BlockedCallHistoryItem {
+  id: string;
+  timestamp: string;
+  callerNumber: string;
+  callerName?: string;
+  countryCode?: string;
+  reason: string;
+}
+
+interface TwilioSpamShieldModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  projectId?: 'dispatchgeeni' | 'tidyups';
+  preFillNumber?: string;
+}
+
+const PRESET_SPAM_COUNTRIES = [
+  { code: '+44', name: 'United Kingdom', flag: '🇬🇧' },
+  { code: '+91', name: 'India', flag: '🇮🇳' },
+  { code: '+234', name: 'Nigeria', flag: '🇳🇬' },
+  { code: '+86', name: 'China', flag: '🇨🇳' },
+  { code: '+7', name: 'Russia / Kazakhstan', flag: '🇷🇺' },
+  { code: '+63', name: 'Philippines', flag: '🇵🇭' },
+  { code: '+92', name: 'Pakistan', flag: '🇵🇰' },
+  { code: '+52', name: 'Mexico', flag: '🇲🇽' },
+  { code: '+380', name: 'Ukraine', flag: '🇺🇦' },
+  { code: '+254', name: 'Kenya', flag: '🇰🇪' },
+  { code: '+33', name: 'France', flag: '🇫🇷' },
+  { code: '+49', name: 'Germany', flag: '🇩🇪' },
+];
+
+const PRESET_SPAM_PREFIXES = [
+  { pattern: '1800*', label: '1-800 Toll Free' },
+  { pattern: '1888*', label: '1-888 Toll Free' },
+  { pattern: '1877*', label: '1-877 Toll Free' },
+  { pattern: '1866*', label: '1-866 Toll Free' },
+  { pattern: '1855*', label: '1-855 Toll Free' },
+  { pattern: '1844*', label: '1-844 Toll Free' },
+  { pattern: '1833*', label: '1-833 Toll Free' },
+];
+
+export const TwilioSpamShieldModal: React.FC<TwilioSpamShieldModalProps> = ({
+  isOpen,
+  onClose,
+  projectId = 'tidyups',
+  preFillNumber = '',
+}) => {
+  const [activeTab, setActiveTab] = useState<'LIVE_CALLS' | 'PREFIXES' | 'COUNTRIES' | 'NUMBERS' | 'LOGS' | 'TEST' | 'COST_LINES'>('LIVE_CALLS');
+  const [isInstantBlockerCollapsed, setIsInstantBlockerCollapsed] = useState(false);
+  const [calcMinutes, setCalcMinutes] = useState(1000);
+  const [calcBlockedCalls, setCalcBlockedCalls] = useState(350);
+  const [config, setConfig] = useState<SpamShieldConfig>({
+    enabled: true,
+    blockAllNonNorthAmerica: true,
+    blockedCountryCodes: ['+44', '+91', '+234', '+86', '+7', '+37', '+20', '+33'],
+    blockedPrefixes: ['1800*', '1888*', '1877*', '1844*', '1855*', '1866*'],
+    blockedNumbers: ['+18005550199', '+18885550123'],
+    rejectionAction: 'busy',
+  });
+  const [history, setHistory] = useState<BlockedCallHistoryItem[]>([]);
+  const [recentCalls, setRecentCalls] = useState<any[]>([]);
+  const [quoScreenedCalls, setQuoScreenedCalls] = useState<any[]>([]);
+  const [allQuoCalls, setAllQuoCalls] = useState<any[]>([]);
+  const [liveFeedFilter, setLiveFeedFilter] = useState<'ALL' | 'ALLOWED' | 'BLOCKED' | 'REPEAT'>('ALL');
+  const [liveFeedSearch, setLiveFeedSearch] = useState('');
+  const [autoRefreshLive, setAutoRefreshLive] = useState(true);
+  const [isSyncingLiveCalls, setIsSyncingLiveCalls] = useState(false);
+  const [lastLiveSyncTime, setLastLiveSyncTime] = useState<string>(new Date().toLocaleTimeString());
+  const [expandedTranscriptIds, setExpandedTranscriptIds] = useState<Record<string, boolean>>({});
+  const [isLoading, setIsLoading] = useState(false);
+  const [statusNotice, setStatusNotice] = useState<string | null>(null);
+
+  // Quick Block & Instant Search Input (Supports full phone number OR 3-digit area code)
+  const [quickBlockInput, setQuickBlockInput] = useState(preFillNumber);
+  const [blockedNumberSearch, setBlockedNumberSearch] = useState(preFillNumber);
+
+  // Form Inputs
+  const [newPrefixInput, setNewPrefixInput] = useState('');
+  const [newCountryInput, setNewCountryInput] = useState('');
+  const [newNumberInput, setNewNumberInput] = useState(preFillNumber);
+
+  // Test Simulator
+  const [testNumberInput, setTestNumberInput] = useState(preFillNumber || '+1 (844) 932-8819');
+  const [testResult, setTestResult] = useState<any | null>(null);
+  const [isTesting, setIsTesting] = useState(false);
+  const [copiedWebhook, setCopiedWebhook] = useState(false);
+  const [forwardNumberInput, setForwardNumberInput] = useState('+15879007223');
+
+  // 1-to-1 Line Router Inputs
+  const [mapTwilioNumber, setMapTwilioNumber] = useState('');
+  const [mapQuoNumber, setMapQuoNumber] = useState('+15875708005');
+  const [mapLabel, setMapLabel] = useState('Primary Dispatch');
+  const [testDialedLine, setTestDialedLine] = useState('');
+
+  const webhookUrl = typeof window !== 'undefined'
+    ? `${window.location.origin}/api/twilio/voice`
+    : 'https://app.tidyupscleaning.com/api/twilio/voice';
+
+  // Fetch current config & history + merge Firestore blocked numbers
+  const fetchSpamShield = async (opts?: { silent?: boolean; forceSync?: boolean }) => {
+    if (!opts?.silent) setIsLoading(true);
+    if (opts?.forceSync) setIsSyncingLiveCalls(true);
+    try {
+      const url = `/api/twilio/spam-shield?project=${projectId}${opts?.forceSync ? '&forceSync=1' : ''}`;
+      const [res, firestoreRules] = await Promise.all([
+        fetch(url),
+        opts?.silent ? Promise.resolve(null) : fetchBlockedNumberRulesFromFirestore().catch(() => []),
+      ]);
+      const data = await res.json();
+      if (data.success && data.config) {
+        const unblockedSet = new Set(
+          ((data.config as any).unblockedNumbers || []).map((u: string) => {
+            const d = String(u || '').replace(/\D/g, '');
+            return d.length === 11 && d.startsWith('1') ? d.slice(1) : d;
+          })
+        );
+        const mergedNumbers = [...(data.config.blockedNumbers || [])];
+        const existingNorms = new Set(
+          mergedNumbers.map((n: string) => {
+            const d = String(n || '').replace(/\D/g, '');
+            return d.length === 11 && d.startsWith('1') ? d.slice(1) : d;
+          })
+        );
+        if (Array.isArray(firestoreRules)) {
+          for (const r of firestoreRules) {
+            if (r.ruleType === 'number' && r.pattern && r.isActive !== false) {
+              const d = String(r.pattern).replace(/\D/g, '');
+              const norm = d.length === 11 && d.startsWith('1') ? d.slice(1) : d;
+              if (norm && !unblockedSet.has(norm) && !existingNorms.has(norm)) {
+                mergedNumbers.push(r.pattern);
+                existingNorms.add(norm);
+              }
+            }
+          }
+        }
+        setConfig({ ...data.config, blockedNumbers: mergedNumbers });
+        if (data.config.forwardDestinationNumber && !opts?.silent) {
+          setForwardNumberInput(data.config.forwardDestinationNumber);
+        }
+        if (data.history) setHistory(data.history);
+        if (data.recentInboundCalls) setRecentCalls(data.recentInboundCalls);
+        if (data.quoScreenedCalls) setQuoScreenedCalls(data.quoScreenedCalls);
+        if (data.allQuoCalls) setAllQuoCalls(data.allQuoCalls);
+        setLastLiveSyncTime(new Date().toLocaleTimeString());
+      }
+    } catch (e) {
+      console.warn('Failed to fetch spam shield config:', e);
+    } finally {
+      if (!opts?.silent) setIsLoading(false);
+      if (opts?.forceSync) setIsSyncingLiveCalls(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      fetchSpamShield({ forceSync: true });
+      if (preFillNumber) {
+        setQuickBlockInput(preFillNumber);
+        setBlockedNumberSearch(preFillNumber);
+        setNewNumberInput(preFillNumber);
+        setTestNumberInput(preFillNumber);
+      }
+    }
+  }, [isOpen, preFillNumber]);
+
+  useEffect(() => {
+    if (!isOpen || !autoRefreshLive) return;
+    const interval = setInterval(() => {
+      fetchSpamShield({ silent: true });
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [isOpen, autoRefreshLive, projectId]);
+
+  // Deduplicate and group line mappings by 10-digit number (must be called before early return per Rules of Hooks)
+  const uniqueMappings = useMemo(() => {
+    const raw = config.lineMappings || {};
+    const seen = new Map<string, { inbound: string; target: string; allKeys: string[] }>();
+    for (const [inbound, target] of Object.entries(raw)) {
+      const normDigits = inbound.replace(/\D/g, "").slice(-10);
+      if (!seen.has(normDigits)) {
+        seen.set(normDigits, { inbound, target, allKeys: [inbound] });
+      } else {
+        seen.get(normDigits)!.allKeys.push(inbound);
+      }
+    }
+    return Array.from(seen.values());
+  }, [config.lineMappings]);
+
+  if (!isOpen) return null;
+
+  // Normalize any phone string to 10-digit North American format for reliable comparison
+  const normalizePhone10 = (rawInput: string): string => {
+    const digits = String(rawInput || '').replace(/\D/g, '');
+    return digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
+  };
+
+  const formatPhonePretty = (rawInput: string): string => {
+    const norm = normalizePhone10(rawInput);
+    if (norm.length === 10) {
+      return `(${norm.slice(0, 3)}) ${norm.slice(3, 6)}-${norm.slice(6)}`;
+    }
+    return String(rawInput || '').trim();
+  };
+
+  // Extract 3-digit area code from any input (e.g. "844", "(780) 555-1234", "+18449328819")
+  const extractAreaCode = (rawInput: string): string => {
+    const digits = (rawInput || '').replace(/\D/g, '');
+    const norm = digits.length >= 4 && digits.startsWith('1') ? digits.slice(1) : digits;
+    return norm.length >= 3 ? norm.slice(0, 3) : '';
+  };
+
+  const quickDetectedAreaCode = extractAreaCode(quickBlockInput);
+  const quickDigitsCount = (quickBlockInput || '').replace(/\D/g, '').length;
+
+  // Evaluate live lookup status & find all matching blocked numbers/calls for whatever number is typed in quickBlockInput
+  const evaluateLookupStatus = (rawQuery: string) => {
+    const trimmed = String(rawQuery || '').trim();
+    const cleanDigits = normalizePhone10(trimmed);
+    if (cleanDigits.length < 2 && trimmed.length < 2) return null;
+
+    const exactMatchedEntry = (config.blockedNumbers || []).find((b) => {
+      const bNorm = normalizePhone10(b);
+      return (cleanDigits.length >= 7 && bNorm === cleanDigits) || String(b).trim() === trimmed;
+    });
+
+    const partialMatchedEntries = (config.blockedNumbers || []).filter((b) => {
+      const bNorm = normalizePhone10(b);
+      return (
+        (cleanDigits && bNorm.includes(cleanDigits)) ||
+        String(b).toLowerCase().includes(trimmed.toLowerCase())
+      );
+    });
+
+    const matchedPrefix = (config.blockedPrefixes || []).find((p) => {
+      const pDigits = String(p || '').replace(/\*/g, '').replace(/\D/g, '');
+      const pNorm = pDigits.length >= 4 && pDigits.startsWith('1') ? pDigits.slice(1) : pDigits;
+      return Boolean(cleanDigits && pNorm && (cleanDigits.startsWith(pNorm) || pNorm.includes(cleanDigits)));
+    });
+
+    const matchedScreenedList = quoScreenedCalls.filter((c) => {
+      const cNorm = normalizePhone10(c.callerPhone);
+      return (
+        (cleanDigits && cNorm.includes(cleanDigits)) ||
+        String(c.callerName || '').toLowerCase().includes(trimmed.toLowerCase()) ||
+        String(c.callerPhone || '').toLowerCase().includes(trimmed.toLowerCase())
+      );
+    });
+
+    const matchedHistoryList = history.filter((h) => {
+      const hNorm = normalizePhone10(h.callerNumber);
+      return (
+        (cleanDigits && hNorm.includes(cleanDigits)) ||
+        String(h.callerName || '').toLowerCase().includes(trimmed.toLowerCase()) ||
+        String(h.callerNumber || '').toLowerCase().includes(trimmed.toLowerCase())
+      );
+    });
+
+    const matchedScreened = matchedScreenedList.find((c) => normalizePhone10(c.callerPhone) === cleanDigits) || matchedScreenedList[0];
+    const matchedHistory = matchedHistoryList.find((h) => normalizePhone10(h.callerNumber) === cleanDigits) || matchedHistoryList[0];
+
+    const isScreenedBlocked = Boolean(
+      matchedScreened &&
+        normalizePhone10(matchedScreened.callerPhone) === cleanDigits &&
+        (matchedScreened.isBlocked || matchedScreened.status === 'SOLICITOR_BLOCKED')
+    );
+
+    const isWhitelisted = Boolean(
+      cleanDigits.length >= 7 &&
+        ((config as any).unblockedNumbers || []).some((u: string) => normalizePhone10(u) === cleanDigits)
+    );
+
+    const isBlocked = Boolean(!isWhitelisted && (exactMatchedEntry || matchedPrefix || isScreenedBlocked));
+
+    const combinedMatches: Array<{
+      phone: string;
+      norm10: string;
+      pretty: string;
+      label: string;
+      source: string;
+      isBlocked: boolean;
+    }> = [];
+    const seenNorms = new Set<string>();
+
+    for (const b of partialMatchedEntries) {
+      const n10 = normalizePhone10(b) || b;
+      if (seenNorms.has(n10)) continue;
+      seenNorms.add(n10);
+      const hist = history.find((h) => normalizePhone10(h.callerNumber) === n10);
+      const scr = quoScreenedCalls.find((c) => normalizePhone10(c.callerPhone) === n10);
+      combinedMatches.push({
+        phone: b,
+        norm10: n10,
+        pretty: formatPhonePretty(b),
+        label: scr?.callerName || hist?.reason || 'Saved in Blocked Exact Numbers',
+        source: 'Blocked List',
+        isBlocked: true,
+      });
+    }
+
+    for (const c of matchedScreenedList) {
+      const n10 = normalizePhone10(c.callerPhone) || c.callerPhone;
+      if (!n10 || seenNorms.has(n10)) continue;
+      seenNorms.add(n10);
+      const cBlocked = Boolean(c.isBlocked || c.status === 'SOLICITOR_BLOCKED');
+      combinedMatches.push({
+        phone: c.callerPhone,
+        norm10: n10,
+        pretty: formatPhonePretty(c.callerPhone),
+        label: `${c.callerName ? `${c.callerName} — ` : ''}${c.summary || c.blockedReason || 'Sonia AI Screened Call'}`,
+        source: 'Sonia AI Call List',
+        isBlocked: cBlocked,
+      });
+    }
+
+    for (const h of matchedHistoryList) {
+      const n10 = normalizePhone10(h.callerNumber) || h.callerNumber;
+      if (!n10 || seenNorms.has(n10)) continue;
+      seenNorms.add(n10);
+      combinedMatches.push({
+        phone: h.callerNumber,
+        norm10: n10,
+        pretty: formatPhonePretty(h.callerNumber),
+        label: h.reason || 'Intercepted in Blocked Calls History',
+        source: 'Blocked History Log',
+        isBlocked: true,
+      });
+    }
+
+    return {
+      rawQuery: trimmed,
+      cleanDigits,
+      prettyPhone: formatPhonePretty(trimmed),
+      isBlocked,
+      isWhitelisted,
+      exactMatchedEntry,
+      partialMatchedEntries,
+      matchedPrefix,
+      matchedScreened,
+      matchedHistory,
+      isScreenedBlocked,
+      combinedMatches,
+    };
+  };
+
+  const topLookupStatus = evaluateLookupStatus(quickBlockInput);
+
+  // Save config update
+  const handleSaveConfig = async (newConfig: Partial<SpamShieldConfig>) => {
+    const updated = { ...config, ...newConfig };
+    setConfig(updated);
+    try {
+      const res = await fetch(`/api/twilio/spam-shield?project=${projectId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: updated }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setStatusNotice('Shield rules updated and active in Twilio!');
+        setTimeout(() => setStatusNotice(null), 3000);
+      }
+    } catch {
+      setStatusNotice('Error saving spam configuration.');
+    }
+  };
+
+  // Block item (number, prefix, areacode, country) & sync to Firestore
+  const handleBlockItem = async (number: string, type: 'number' | 'prefix' | 'areacode' | 'country', reason?: string) => {
+    if (!number.trim()) return;
+    try {
+      const res = await fetch(`/api/twilio/block-number?project=${projectId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ number: number.trim(), type, reason }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setConfig(data.config);
+        if (data.history) setHistory(data.history);
+        if (data.recentInboundCalls) setRecentCalls(data.recentInboundCalls);
+        if (data.calls) {
+          setAllQuoCalls(data.calls);
+          setQuoScreenedCalls(
+            data.calls.filter(
+              (c: any) => !c.hasCleaningIntent || c.status === 'SOLICITOR_BLOCKED' || c.status === 'SCREENED_CALL' || c.isBlocked
+            )
+          );
+        }
+        saveBlockedNumberToFirestore({
+          number: data.appliedRule || number.trim(),
+          type,
+          reason: reason || `Blocked via Spam Shield Modal (${type})`,
+          source: 'TwilioSpamShieldModal',
+        }).catch(() => {});
+        setStatusNotice(data.message || `Blocked & saved to Database: ${data.appliedRule || number.trim()}`);
+        setTimeout(() => setStatusNotice(null), 4000);
+        if (type === 'prefix' || type === 'areacode') setNewPrefixInput('');
+        if (type === 'country') setNewCountryInput('');
+        if (type === 'number') setNewNumberInput('');
+      }
+    } catch {
+      setStatusNotice('Error blocking rule.');
+    }
+  };
+
+  // Unblock item & sync to Firestore
+  const handleUnblockItem = async (number: string, type: 'number' | 'prefix' | 'country') => {
+    try {
+      const res = await fetch(`/api/twilio/unblock-number?project=${projectId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ number, type }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setConfig(data.config);
+        if (data.history) setHistory(data.history);
+        if (data.recentInboundCalls) setRecentCalls(data.recentInboundCalls);
+        if (data.calls) {
+          setAllQuoCalls(data.calls);
+          setQuoScreenedCalls(
+            data.calls.filter(
+              (c: any) => !c.hasCleaningIntent || c.status === 'SOLICITOR_BLOCKED' || c.status === 'SCREENED_CALL' || c.isBlocked
+            )
+          );
+        }
+        deleteBlockedNumberFromFirestore(number).catch(() => {});
+        setStatusNotice(`✅ Unblocked & whitelisted in Database: ${formatPhonePretty(number)}`);
+        setTimeout(() => setStatusNotice(null), 3500);
+      }
+    } catch {
+      setStatusNotice('Error unblocking rule.');
+    }
+  };
+
+  // Toggle block on a Quo / Sonia AI screened call directly
+  const handleToggleScreenedCallBlock = async (call: any, shouldBlock: boolean) => {
+    try {
+      const res = await fetch(`/api/quo/calls/toggle-block?project=${projectId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          callId: call.id,
+          callerPhone: call.callerPhone,
+          callerName: call.callerName,
+          reason: call.summary ? `Sonia AI Screened (${call.callerName || call.callerPhone}): ${String(call.summary).slice(0, 80)}` : undefined,
+          block: shouldBlock,
+        }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        if (data.spamShieldConfig) setConfig(data.spamShieldConfig);
+        if (data.blockedCallsHistory) setHistory(data.blockedCallsHistory);
+        if (Array.isArray(data.calls)) {
+          setAllQuoCalls(data.calls);
+          setQuoScreenedCalls(
+            data.calls.filter(
+              (c: any) => !c.hasCleaningIntent || c.status === 'SOLICITOR_BLOCKED' || c.status === 'SCREENED_CALL' || c.isBlocked
+            )
+          );
+          const updated = data.calls.find((c: any) => c.id === call.id);
+          if (updated) saveScreenedCallToFirestore(updated).catch(() => {});
+        }
+        if (shouldBlock) {
+          saveBlockedNumberToFirestore({
+            number: data.number || call.callerPhone,
+            type: 'number',
+            reason: call.summary || 'Blocked from Screened Call List',
+            callerName: call.callerName,
+            source: 'Sonia AI Screener',
+          }).catch(() => {});
+        } else {
+          deleteBlockedNumberFromFirestore(data.number || call.callerPhone).catch(() => {});
+        }
+        setStatusNotice(data.message);
+        setTimeout(() => setStatusNotice(null), 4000);
+      }
+    } catch {
+      setStatusNotice('Error updating screened call block status.');
+    }
+  };
+
+  // Build Unified Live Call Stream combining Twilio recentInboundCalls, allQuoCalls, and blockedCallsHistory
+  const unifiedLiveCallStream = useMemo(() => {
+    const evaluateNumberAgainstShield = (rawPhone: string, callObj?: any) => {
+      const clean10 = normalizePhone10(rawPhone);
+      const area = extractAreaCode(rawPhone);
+      const isWhitelisted = Boolean(
+        clean10.length >= 7 &&
+          ((config as any).unblockedNumbers || []).some((u: string) => normalizePhone10(u) === clean10)
+      );
+      if (isWhitelisted) {
+        return {
+          isBlocked: false,
+          isWhitelisted: true,
+          reason: 'Whitelisted / Unblocked Caller — Always Allowed',
+          matchedPrefix: undefined as string | undefined,
+          areaCode: area,
+          clean10,
+        };
+      }
+      const exactEntry = (config.blockedNumbers || []).find((b) => {
+        const bNorm = normalizePhone10(b);
+        return clean10.length >= 7 && bNorm === clean10;
+      });
+      if (exactEntry) {
+        return {
+          isBlocked: true,
+          isWhitelisted: false,
+          reason: `Blocked Exact Number (${exactEntry})`,
+          matchedPrefix: undefined as string | undefined,
+          areaCode: area,
+          clean10,
+        };
+      }
+      const matchedPrefix = (config.blockedPrefixes || []).find((p) => {
+        const pDigits = String(p || '').replace(/\*/g, '').replace(/\D/g, '');
+        const pNorm = pDigits.length >= 4 && pDigits.startsWith('1') ? pDigits.slice(1) : pDigits;
+        return Boolean(clean10 && pNorm && clean10.startsWith(pNorm));
+      });
+      if (matchedPrefix) {
+        return {
+          isBlocked: true,
+          isWhitelisted: false,
+          reason: `Blocked Area Code / Prefix Rule (${matchedPrefix})`,
+          matchedPrefix,
+          areaCode: area,
+          clean10,
+        };
+      }
+      if (callObj?.isBlocked || callObj?.status === 'BLOCKED' || callObj?.status === 'SOLICITOR_BLOCKED') {
+        return {
+          isBlocked: true,
+          isWhitelisted: false,
+          reason: callObj.blockedReason || callObj.reason || 'Blocked by Spam Shield / Solicitor Screener',
+          matchedPrefix: undefined as string | undefined,
+          areaCode: area,
+          clean10,
+        };
+      }
+      return {
+        isBlocked: false,
+        isWhitelisted: false,
+        reason: 'Not Blocked — Allowed to Quo Line',
+        matchedPrefix: undefined as string | undefined,
+        areaCode: area,
+        clean10,
+      };
+    };
+
+    const rawItems: Array<{
+      id: string;
+      timestamp: string;
+      callerPhone: string;
+      prettyPhone: string;
+      clean10: string;
+      areaCode: string;
+      callerName: string;
+      dialedLine: string;
+      sourceBadge: string;
+      duration?: number;
+      summary?: string;
+      transcriptText?: string;
+      isBlocked: boolean;
+      isWhitelisted: boolean;
+      blockReason: string;
+      matchedPrefix?: string;
+      leadVerdictLabel?: string;
+      rawQuoCall?: any;
+    }> = [];
+
+    const seenKeys = new Set<string>();
+
+    for (const rc of recentCalls || []) {
+      const phone = rc.callerNumber || '';
+      const clean10 = normalizePhone10(phone);
+      if (!clean10 && !phone) continue;
+      const ts = rc.timestamp || new Date().toISOString();
+      const bucket15s = Math.floor(new Date(ts).getTime() / 15000);
+      const dedupeKey = `${clean10 || phone}-${bucket15s}`;
+      seenKeys.add(dedupeKey);
+      const shieldCheck = evaluateNumberAgainstShield(phone, rc);
+      rawItems.push({
+        id: rc.id || rc.callSid || `tw-${ts}-${phone}`,
+        timestamp: ts,
+        callerPhone: phone,
+        prettyPhone: formatPhonePretty(phone),
+        clean10: shieldCheck.clean10,
+        areaCode: rc.areaCode || shieldCheck.areaCode,
+        callerName: rc.callerName || 'Inbound Caller',
+        dialedLine: rc.originalDialedNumber
+          ? `${rc.originalDialedNumber}${rc.campaignLabel ? ` (${rc.campaignLabel})` : ''}`
+          : rc.dialedNumber || 'Twilio Shield Line',
+        sourceBadge: 'Twilio Live Shield',
+        duration: rc.duration,
+        summary: rc.summary || rc.reason || '',
+        transcriptText: rc.transcriptText || '',
+        isBlocked: shieldCheck.isBlocked,
+        isWhitelisted: shieldCheck.isWhitelisted,
+        blockReason: shieldCheck.reason,
+        matchedPrefix: shieldCheck.matchedPrefix,
+        leadVerdictLabel: shieldCheck.isBlocked ? '🚫 Blocked by Shield' : '✅ Allowed to Quo',
+      });
+    }
+
+    for (const qc of allQuoCalls || []) {
+      if (qc.direction === 'outbound' || qc.eventType === 'message.delivered') continue;
+      const phone = qc.callerPhone || '';
+      const clean10 = normalizePhone10(phone);
+      if (!clean10 && !phone) continue;
+      const ts = qc.timestamp || qc.createdAt || new Date().toISOString();
+      const bucket15s = Math.floor(new Date(ts).getTime() / 15000);
+      const dedupeKey = `${clean10 || phone}-${bucket15s}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+      const shieldCheck = evaluateNumberAgainstShield(phone, qc);
+      rawItems.push({
+        id: qc.id || qc.callId || `quo-${ts}-${phone}`,
+        timestamp: ts,
+        callerPhone: phone,
+        prettyPhone: formatPhonePretty(phone),
+        clean10: shieldCheck.clean10,
+        areaCode: shieldCheck.areaCode,
+        callerName: qc.callerName && qc.callerName !== '0 Lead(s)' ? qc.callerName : 'Inbound Caller',
+        dialedLine: qc.lineName || 'Quo / OpenPhone Line',
+        sourceBadge: qc.answeredByAi ? 'Quo • Sonia AI' : 'Quo / OpenPhone',
+        duration: qc.duration,
+        summary: qc.summary || qc.leadVerdictReason || '',
+        transcriptText: qc.transcriptText || '',
+        isBlocked: shieldCheck.isBlocked,
+        isWhitelisted: shieldCheck.isWhitelisted,
+        blockReason: shieldCheck.reason,
+        matchedPrefix: shieldCheck.matchedPrefix,
+        leadVerdictLabel: shieldCheck.isBlocked
+          ? '🚫 Blocked / Solicitor'
+          : qc.leadVerdictLabel || (qc.hasCleaningIntent ? '✅ Good Cleaning Lead' : '📞 Answered / Allowed'),
+        rawQuoCall: qc,
+      });
+    }
+
+    for (const h of history || []) {
+      const phone = h.callerNumber || '';
+      if (phone.includes('*') || phone.length < 7) continue;
+      const clean10 = normalizePhone10(phone);
+      if (clean10.length < 7) continue;
+      const ts = h.timestamp || new Date().toISOString();
+      const bucket60s = Math.floor(new Date(ts).getTime() / 60000);
+      const alreadyExists = rawItems.some(
+        (existing) =>
+          existing.clean10 === clean10 &&
+          Math.abs(new Date(existing.timestamp).getTime() - new Date(ts).getTime()) < 90000
+      );
+      if (alreadyExists) continue;
+      const shieldCheck = evaluateNumberAgainstShield(phone, { isBlocked: true, reason: h.reason });
+      rawItems.push({
+        id: h.id || `hist-${bucket60s}-${phone}`,
+        timestamp: ts,
+        callerPhone: phone,
+        prettyPhone: formatPhonePretty(phone),
+        clean10: shieldCheck.clean10,
+        areaCode: shieldCheck.areaCode,
+        callerName: h.callerName || 'Blocked Caller',
+        dialedLine: 'Twilio Spam Shield Intercept',
+        sourceBadge: 'Shield Intercept',
+        summary: h.reason || 'Rejected by Spam Shield',
+        isBlocked: shieldCheck.isBlocked,
+        isWhitelisted: shieldCheck.isWhitelisted,
+        blockReason: shieldCheck.reason,
+        matchedPrefix: shieldCheck.matchedPrefix,
+        leadVerdictLabel: shieldCheck.isBlocked ? '🚫 Intercepted & Blocked' : '✅ Unblocked Caller',
+      });
+    }
+
+    rawItems.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    const countsByPhone = new Map<string, number>();
+    for (const item of rawItems) {
+      const key = item.clean10 || item.callerPhone;
+      if (key) countsByPhone.set(key, (countsByPhone.get(key) || 0) + 1);
+    }
+
+    return rawItems.map((item) => ({
+      ...item,
+      repeatCount: countsByPhone.get(item.clean10 || item.callerPhone) || 1,
+    }));
+  }, [recentCalls, allQuoCalls, history, config]);
+
+  const filteredLiveCallStream = useMemo(() => {
+    return unifiedLiveCallStream.filter((item) => {
+      if (liveFeedFilter === 'ALLOWED' && item.isBlocked) return false;
+      if (liveFeedFilter === 'BLOCKED' && !item.isBlocked) return false;
+      if (liveFeedFilter === 'REPEAT' && item.repeatCount < 2) return false;
+      if (liveFeedSearch.trim()) {
+        const q = liveFeedSearch.trim().toLowerCase();
+        const qDigits = q.replace(/\D/g, '');
+        const matchText =
+          item.prettyPhone.toLowerCase().includes(q) ||
+          item.callerName.toLowerCase().includes(q) ||
+          item.dialedLine.toLowerCase().includes(q) ||
+          (item.summary || '').toLowerCase().includes(q) ||
+          item.blockReason.toLowerCase().includes(q);
+        const matchDigits = Boolean(qDigits && (item.clean10.includes(qDigits) || item.areaCode.includes(qDigits)));
+        return matchText || matchDigits;
+      }
+      return true;
+    });
+  }, [unifiedLiveCallStream, liveFeedFilter, liveFeedSearch]);
+
+  const liveBlockedTotal = unifiedLiveCallStream.filter((c) => c.isBlocked).length;
+  const liveAllowedTotal = unifiedLiveCallStream.filter((c) => !c.isBlocked).length;
+  const liveRepeatTotal = unifiedLiveCallStream.filter((c) => c.repeatCount >= 2).length;
+
+  const formatRelativeTime = (iso: string) => {
+    const ms = Date.now() - new Date(iso).getTime();
+    if (isNaN(ms) || ms < 0) return 'Just now';
+    const sec = Math.floor(ms / 1000);
+    if (sec < 60) return `${sec}s ago`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h ago`;
+    const days = Math.floor(hr / 24);
+    return `${days}d ago`;
+  };
+
+  // Add 1-to-1 line mapping
+  const handleAddLineMapping = () => {
+    if (!mapTwilioNumber.trim() || !mapQuoNumber.trim()) {
+      setStatusNotice('Please enter both the Twilio Inbound Number and target Quo Number.');
+      return;
+    }
+    const currentMappings = config.lineMappings || {};
+    const updated = {
+      ...currentMappings,
+      [mapTwilioNumber.trim()]: mapQuoNumber.trim(),
+    };
+    handleSaveConfig({ lineMappings: updated });
+    setMapTwilioNumber('');
+    setStatusNotice(`Mapped 1-to-1 route: ${mapTwilioNumber.trim()} ➔ ${mapQuoNumber.trim()}`);
+  };
+
+  // Helper to resolve Quo marketing line labels across all 6 Quo numbers + Richard Direct 780-718-5092
+  const getQuoLineLabel = (target: string) => {
+    const digits = target.replace(/\D/g, "");
+    if (digits.endsWith("4169181")) return "Tidyups Cleaning & Jobber (Main)";
+    if (digits.endsWith("9007223")) return "Tidyups Cleaning - GMB Direct";
+    if (digits.endsWith("7422500")) return "Cleaning Services Ads";
+    if (digits.endsWith("5708005")) return "Primary Dispatch";
+    if (digits.endsWith("8439877")) return "Toll Free TIDYUPS";
+    if (digits.endsWith("6027792")) return "Door Hangers & Signs";
+    if (digits.endsWith("7185092")) return "Richard Direct (780-718-5092)";
+    return "Custom Quo Line";
+  };
+
+  // Remove 1-to-1 line mapping
+  const handleRemoveLineMapping = (inboundNumber: string, allKeys?: string[]) => {
+    const currentMappings = { ...(config.lineMappings || {}) };
+    if (allKeys && allKeys.length > 0) {
+      allKeys.forEach((k) => delete currentMappings[k]);
+    } else {
+      delete currentMappings[inboundNumber];
+    }
+    handleSaveConfig({ lineMappings: currentMappings });
+    setStatusNotice(`Removed 1-to-1 route for ${inboundNumber}`);
+  };
+
+  // Test phone number
+  const handleRunTest = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!testNumberInput.trim()) return;
+    setIsTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch(`/api/twilio/test-number?project=${projectId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          number: testNumberInput.trim(),
+          calledNumber: testDialedLine.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      setTestResult(data);
+    } catch {
+      setTestResult({
+        isBlocked: false,
+        reason: 'Error testing number against server endpoint.',
+      });
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  // Clear history
+  const handleClearHistory = async () => {
+    try {
+      await fetch(`/api/twilio/clear-history?project=${projectId}`, { method: 'POST' });
+      setHistory([]);
+      setStatusNotice('Blocked call history cleared.');
+      setTimeout(() => setStatusNotice(null), 2500);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleCopyWebhook = () => {
+    navigator.clipboard.writeText(webhookUrl);
+    setCopiedWebhook(true);
+    setTimeout(() => setCopiedWebhook(false), 2000);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md animate-fadeIn pointer-events-auto">
+      <div className="bg-[#10131d] border border-slate-700/80 rounded-2xl sm:rounded-3xl w-full max-w-6xl max-h-[95vh] flex flex-col shadow-2xl text-slate-100 overflow-hidden font-sans">
+        {/* Compact Header + Inline Status Badges + Main Tabs (No Horizontal Scrollbar) */}
+        <div className="px-4 sm:px-6 pt-3.5 pb-0 bg-[#161a28] border-b border-slate-800 shrink-0">
+          <div className="flex items-center justify-between gap-3 pb-3">
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="w-9 h-9 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center shrink-0">
+                <ShieldAlert className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="text-base sm:text-lg font-black text-white tracking-tight">
+                    Twilio Spam Shield &amp; Call Blocker
+                  </h2>
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    {config.enabled ? 'ACTIVE & ENFORCING' : 'DISABLED'}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-rose-500/15 text-rose-300 border border-rose-500/30">
+                    {config.blockedPrefixes.length} Prefixes Active
+                  </span>
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-blue-500/15 text-blue-300 border border-blue-500/30">
+                    {config.blockAllNonNorthAmerica ? '+1 US/Canada Only' : `${config.blockedCountryCodes.length} Countries`}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                    {history.length} Robocalls Dropped
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsInstantBlockerCollapsed((prev) => !prev)}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-bold border border-slate-700 transition-all cursor-pointer"
+                title="Show or hide the top Instant Blocker box to open up more screen space"
+              >
+                {isInstantBlockerCollapsed ? '▼ Show Instant Blocker' : '▲ Hide Top Blocker'}
+              </button>
+              <button
+                onClick={onClose}
+                className="p-2 rounded-xl bg-slate-800 hover:bg-rose-600 text-slate-300 hover:text-white transition-all cursor-pointer"
+                title="Close Spam Shield"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Primary Navigation Tabs — Clean Flex Wrap with Zero Horizontal Scrollbar */}
+          <div className="flex items-center gap-1.5 flex-wrap pt-1 text-xs">
+            <button
+              onClick={() => setActiveTab('LIVE_CALLS')}
+              className={`pb-2.5 px-3 font-black transition-all flex items-center gap-1.5 border-b-2 cursor-pointer ${
+                activeTab === 'LIVE_CALLS'
+                  ? 'border-emerald-400 text-emerald-300'
+                  : 'border-transparent text-emerald-400/80 hover:text-emerald-200'
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+              <PhoneCall className="w-3.5 h-3.5" />
+              <span>Live Call Feed (Blocked vs. Allowed)</span>
+              <span className="px-1.5 py-0.2 rounded text-[10px] bg-emerald-500/20 text-emerald-300">
+                {unifiedLiveCallStream.length}
+              </span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('PREFIXES')}
+              className={`pb-2.5 px-3 font-bold transition-all flex items-center gap-1.5 border-b-2 cursor-pointer ${
+                activeTab === 'PREFIXES'
+                  ? 'border-rose-500 text-rose-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Hash className="w-3.5 h-3.5" />
+              <span>Rotating Numbers &amp; Prefixes</span>
+              <span className="px-1.5 py-0.2 rounded text-[10px] bg-rose-500/20 text-rose-300">
+                {config.blockedPrefixes.length}
+              </span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('COUNTRIES')}
+              className={`pb-2.5 px-3 font-bold transition-all flex items-center gap-1.5 border-b-2 cursor-pointer ${
+                activeTab === 'COUNTRIES'
+                  ? 'border-blue-500 text-blue-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>Country Codes</span>
+              {config.blockAllNonNorthAmerica && (
+                <span className="px-1.5 py-0.2 rounded text-[10px] bg-blue-500/20 text-blue-300">
+                  +1 Only
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setActiveTab('NUMBERS')}
+              className={`pb-2.5 px-3 font-bold transition-all flex items-center gap-1.5 border-b-2 cursor-pointer ${
+                activeTab === 'NUMBERS'
+                  ? 'border-amber-500 text-amber-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <PhoneOff className="w-3.5 h-3.5" />
+              <span>Blacklisted Numbers</span>
+              <span className="px-1.5 py-0.2 rounded text-[10px] bg-amber-500/20 text-amber-300">
+                {config.blockedNumbers.length}
+              </span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('LOGS')}
+              className={`pb-2.5 px-3 font-bold transition-all flex items-center gap-1.5 border-b-2 cursor-pointer ${
+                activeTab === 'LOGS'
+                  ? 'border-purple-500 text-purple-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>Blocked Calls Log</span>
+              <span className="px-1.5 py-0.2 rounded text-[10px] bg-purple-500/20 text-purple-300">
+                {history.length}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* Unified Open Scrollable Body (Nothing traps the top half of the screen) */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+          {/* Status Notification Toast */}
+          {statusNotice && (
+            <div className="p-3 rounded-xl bg-emerald-950/90 border border-emerald-500/50 text-emerald-200 text-xs flex items-center justify-between shadow-lg animate-fadeIn">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="font-extrabold">{statusNotice}</span>
+              </div>
+              <button onClick={() => setStatusNotice(null)} className="text-emerald-400 hover:text-white font-bold">×</button>
+            </div>
+          )}
+
+          {/* 🔍 INSTANT NUMBER SEARCH (BLOCKED VS NOT BLOCKED) & 1-CLICK BLOCKER BAR */}
+          {!isInstantBlockerCollapsed && (
+            <div className="p-3.5 rounded-2xl bg-gradient-to-r from-rose-950/70 via-[#1a1528] to-slate-900 border border-rose-500/40 shadow-md space-y-2.5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="px-2 py-0.5 rounded-md bg-rose-600 text-white text-[10px] font-black uppercase tracking-wider flex items-center gap-1">
+                    <Search className="w-3 h-3" />
+                    <span>Search &amp; Instant Blocker</span>
+                  </span>
+                  <h3 className="text-xs font-black text-white">
+                    Search Any Number to Check if Blocked or Not (or Block Immediately)
+                  </h3>
+                </div>
+                <div className="flex items-center gap-2 self-start sm:self-auto">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuickBlockInput('7807603033');
+                      setBlockedNumberSearch('7807603033');
+                    }}
+                    className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40 text-[10px] font-mono font-bold cursor-pointer"
+                  >
+                    🔍 Check 7807603033
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsInstantBlockerCollapsed(true)}
+                    className="text-[11px] text-slate-400 hover:text-white font-bold cursor-pointer"
+                  >
+                    Minimize ▲
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-col md:flex-row gap-2">
+                <div className="relative flex-1">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={quickBlockInput}
+                    onChange={(e) => {
+                      setQuickBlockInput(e.target.value);
+                      setBlockedNumberSearch(e.target.value);
+                    }}
+                    placeholder="Search phone number to see if blocked (e.g. 7807603033) OR 3-digit Area Code..."
+                    className="w-full pl-8 pr-8 py-2 rounded-xl bg-slate-950/90 border border-slate-700 text-white text-xs font-mono placeholder:text-slate-500 focus:outline-none focus:border-rose-500"
+                  />
+                  {quickBlockInput && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQuickBlockInput('');
+                        setBlockedNumberSearch('');
+                      }}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs font-bold cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap sm:flex-nowrap gap-2">
+                  <button
+                    type="button"
+                    disabled={quickDigitsCount < 7 && !topLookupStatus?.exactMatchedEntry}
+                    onClick={() =>
+                      handleUnblockItem(
+                        topLookupStatus?.exactMatchedEntry || quickBlockInput.trim(),
+                        'number'
+                      )
+                    }
+                    className="flex-1 sm:flex-initial px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-md cursor-pointer transition-all whitespace-nowrap"
+                    title="Unblock and whitelist this phone number"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Unblock Number</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={quickDigitsCount < 7}
+                    onClick={() =>
+                      handleBlockItem(
+                        quickBlockInput,
+                        'number',
+                        `Blocked exact caller (${quickBlockInput.trim()}) from main website`
+                      )
+                    }
+                    className="flex-1 sm:flex-initial px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-md cursor-pointer transition-all whitespace-nowrap"
+                    title="Block this exact phone number"
+                  >
+                    <PhoneOff className="w-3.5 h-3.5" />
+                    <span>Block Number</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={!quickDetectedAreaCode}
+                    onClick={() =>
+                      handleBlockItem(
+                        quickDetectedAreaCode,
+                        'areacode',
+                        `Blocked entire (${quickDetectedAreaCode}) area code from main website`
+                      )
+                    }
+                    className="flex-1 sm:flex-initial px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-md cursor-pointer transition-all whitespace-nowrap"
+                    title="Block all calls from this 3-digit area code"
+                  >
+                    <Hash className="w-3.5 h-3.5" />
+                    <span>
+                      {quickDetectedAreaCode
+                        ? `Block Area Code (${quickDetectedAreaCode}*)`
+                        : 'Block 3-Digit Area Code'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* LIVE INSTANT SEARCH & UNBLOCK PANEL */}
+              {topLookupStatus && (
+                <div
+                  className={`p-3.5 rounded-xl border-2 space-y-2.5 animate-fadeIn ${
+                    topLookupStatus.isBlocked
+                      ? 'bg-rose-950/90 border-rose-500 text-rose-100'
+                      : 'bg-slate-900/95 border-emerald-500/70 text-emerald-100'
+                  }`}
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                    <div className="space-y-0.5 text-xs">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                            topLookupStatus.isBlocked
+                              ? 'bg-rose-600 text-white'
+                              : topLookupStatus.isWhitelisted
+                              ? 'bg-emerald-500 text-slate-950'
+                              : 'bg-emerald-600 text-white'
+                          }`}
+                        >
+                          {topLookupStatus.isBlocked
+                            ? '🚫 BLOCKED'
+                            : topLookupStatus.isWhitelisted
+                            ? '✅ UNBLOCKED & WHITELISTED'
+                            : '✅ NOT BLOCKED'}
+                        </span>
+                        <span className="font-mono font-black text-sm text-white">
+                          {topLookupStatus.prettyPhone}
+                        </span>
+                        {topLookupStatus.cleanDigits.length === 10 && (
+                          <span className="font-mono text-[11px] text-slate-300">
+                            ({topLookupStatus.cleanDigits})
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-slate-200">
+                        {topLookupStatus.exactMatchedEntry ? (
+                          <span>
+                            Found in <strong>Blacklisted Numbers</strong> as{' '}
+                            <code className="px-1 py-0.5 rounded bg-black/40 font-mono text-rose-300">
+                              {topLookupStatus.exactMatchedEntry}
+                            </code>
+                            . Click <strong>Unblock</strong> to restore calls.
+                          </span>
+                        ) : topLookupStatus.matchedPrefix ? (
+                          <span>
+                            Blocked by <strong>Prefix Rule</strong>{' '}
+                            <code className="px-1 py-0.5 rounded bg-black/40 font-mono text-rose-300">
+                              {topLookupStatus.matchedPrefix}
+                            </code>
+                            .
+                          </span>
+                        ) : topLookupStatus.isScreenedBlocked ? (
+                          <span>
+                            Blocked in <strong>Sonia AI Call Screener</strong>. Click <strong>Unblock</strong> to restore.
+                          </span>
+                        ) : topLookupStatus.isWhitelisted ? (
+                          <span>
+                            <strong>{topLookupStatus.prettyPhone}</strong> is <strong>Unblocked &amp; Whitelisted</strong>.
+                          </span>
+                        ) : (
+                          <span>
+                            <strong>{topLookupStatus.prettyPhone}</strong> is <strong>NOT</strong> in your blocked list. Click <strong>Unblock / Whitelist</strong> to ensure it is never blocked, or <strong>Block</strong> to reject it.
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                      {topLookupStatus.cleanDigits.length >= 7 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleUnblockItem(
+                              topLookupStatus.exactMatchedEntry || topLookupStatus.rawQuery,
+                              'number'
+                            )
+                          }
+                          className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs cursor-pointer shadow-md flex items-center gap-1"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>
+                            {topLookupStatus.isBlocked
+                              ? `✅ Unblock ${topLookupStatus.prettyPhone}`
+                              : `✅ Unblock / Whitelist ${topLookupStatus.prettyPhone}`}
+                          </span>
+                        </button>
+                      )}
+                      {topLookupStatus.matchedPrefix && (
+                        <button
+                          type="button"
+                          onClick={() => handleUnblockItem(topLookupStatus.matchedPrefix!, 'prefix')}
+                          className="px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-black text-xs cursor-pointer shadow-md"
+                        >
+                          Unblock Prefix ({topLookupStatus.matchedPrefix})
+                        </button>
+                      )}
+                      {topLookupStatus.cleanDigits.length >= 7 && !topLookupStatus.exactMatchedEntry && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleBlockItem(
+                              topLookupStatus.rawQuery,
+                              'number',
+                              `Blocked via Instant Search (${topLookupStatus.prettyPhone})`
+                            )
+                          }
+                          className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs cursor-pointer shadow-md flex items-center gap-1"
+                        >
+                          <PhoneOff className="w-3.5 h-3.5" />
+                          <span>🚫 Block {topLookupStatus.prettyPhone}</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Matching Numbers List Across All Blocked Lists & Call Logs — Each with a 1-Click UNBLOCK Button */}
+                  {topLookupStatus.combinedMatches.length > 0 && (
+                    <div className="pt-2 border-t border-slate-700/80 space-y-1.5">
+                      <div className="text-[11px] font-extrabold uppercase tracking-wider text-amber-300">
+                        🔍 Matching Numbers Found ({topLookupStatus.combinedMatches.length}) — Click Unblock on Any Number:
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                        {topLookupStatus.combinedMatches.map((item) => (
+                          <div
+                            key={`${item.source}-${item.phone}`}
+                            className="p-2 rounded-xl bg-slate-950/90 border border-slate-700 flex items-center justify-between gap-2 text-xs"
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="font-mono font-black text-white text-xs">
+                                  {item.pretty}
+                                </span>
+                                <span className="font-mono text-[10px] text-slate-400">
+                                  ({item.phone})
+                                </span>
+                                <span
+                                  className={`px-1.5 py-0.5 rounded text-[9px] font-black ${
+                                    item.isBlocked
+                                      ? 'bg-rose-600/30 text-rose-300 border border-rose-500/40'
+                                      : 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40'
+                                  }`}
+                                >
+                                  {item.source}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-slate-300 truncate mt-0.5">
+                                {item.label}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleUnblockItem(item.phone, 'number')}
+                              className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[11px] cursor-pointer shrink-0 shadow-md flex items-center gap-1"
+                            >
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span>Unblock</span>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Live Recent Callers & Original Dialed-Line Attribution Strip */}
+              <div className="mt-2.5 pt-2 border-t border-slate-800/80">
+                <div className="flex items-center justify-between gap-2 flex-wrap mb-1.5">
+                  <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <PhoneCall className="w-3 h-3 text-emerald-400" />
+                    <span>Live Call Screener & Original Line Attribution (Shows Caller ID + Which Number Was Dialed):</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await fetch(`/api/twilio/live-calls/simulate?project=${projectId}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          scenario: 'clean_7223',
+                          callerNumber: '+1 (780) 600-0607',
+                          dialedQuoLine: '+15879007223',
+                          shieldLine: '+18255334317',
+                        }),
+                      });
+                      await fetchSpamShield({ forceSync: true });
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 font-mono text-[10px] font-extrabold cursor-pointer transition-colors"
+                  >
+                    + Simulate Live Call on (587) 900-7223
+                  </button>
+                </div>
+                {recentCalls.length > 0 && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {recentCalls.slice(0, 4).map((call: any) => {
+                      const callArea = call.areaCode || extractAreaCode(call.callerNumber || '');
+                      const isAlreadyBlocked = call.status === 'BLOCKED';
+                      const dateObj = new Date(call.timestamp);
+                      const formattedTime = !isNaN(dateObj.getTime())
+                        ? dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        : (call.timestamp || 'Just now');
+                      return (
+                        <div
+                          key={call.id}
+                          className={`px-2.5 py-1.5 rounded-xl border flex items-center gap-2.5 text-xs ${
+                            isAlreadyBlocked
+                              ? 'bg-rose-950/40 border-rose-500/30 text-rose-200'
+                              : 'bg-slate-900/90 border-slate-700/80 text-slate-200'
+                          }`}
+                        >
+                          <div className="flex flex-col">
+                            <span className="font-mono font-black text-white text-[11px] tabular-nums">
+                              Caller: {call.callerNumber}
+                            </span>
+                            <span className="font-mono text-[10px] text-amber-300 font-bold tabular-nums">
+                              Dialed: {call.originalDialedNumber || '+1 (587) 900-7223'} ({call.campaignLabel || 'GMB Direct'})
+                            </span>
+                            <span className="text-[9px] text-slate-400">
+                              {formattedTime} • {isAlreadyBlocked ? '🚫 Severed (1s Hangup)' : `✅ Routed to ${call.receivingLineLabel || 'Quo Dispatch'}`}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleBlockItem(
+                                  call.callerNumber,
+                                  'number',
+                                  `Blocked recent caller ${call.callerNumber}`
+                                )
+                              }
+                              className="px-2 py-0.5 rounded-lg bg-rose-600/90 hover:bg-rose-500 text-white font-extrabold text-[10px] cursor-pointer"
+                            >
+                              Block #
+                            </button>
+                            {callArea && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleBlockItem(
+                                    callArea,
+                                    'areacode',
+                                    `Blocked area code (${callArea}) from caller ${call.callerNumber}`
+                                  )
+                                }
+                                className="px-2 py-0.5 rounded-lg bg-amber-600/90 hover:bg-amber-500 text-white font-extrabold text-[10px] cursor-pointer"
+                              >
+                                Block {callArea}*
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 0: LIVE INCOMING CALL FEED (ALL CALLS — BLOCKED VS ALLOWED RIGHT IN THE SHIELD MODAL) */}
+          {activeTab === 'LIVE_CALLS' && (
+            <div className="space-y-4 animate-fadeIn">
+              <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-[#131722] via-slate-900 to-[#181224] border-2 border-emerald-500/40 shadow-xl space-y-4">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                        <span>Live Call Stream</span>
+                      </span>
+                      <h3 className="font-black text-base text-white">
+                        All Incoming Calls — See Which Calls Were Blocked vs. Allowed Without Leaving the Shield
+                      </h3>
+                    </div>
+                    <p className="text-xs text-slate-300 mt-1">
+                      Shows all live &amp; recent calls across Quo &amp; Twilio in chronological order (including multiple calls in a row), with 1-click Block / Unblock buttons right on each call.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setAutoRefreshLive(!autoRefreshLive)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-black border transition-all cursor-pointer flex items-center gap-1.5 ${
+                        autoRefreshLive
+                          ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
+                          : 'bg-slate-800 border-slate-700 text-slate-400'
+                      }`}
+                    >
+                      <span className={`w-2 h-2 rounded-full ${autoRefreshLive ? 'bg-emerald-400 animate-ping' : 'bg-slate-500'}`} />
+                      <span>{autoRefreshLive ? 'Auto-Live (4s ON)' : 'Auto-Live Paused'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isSyncingLiveCalls}
+                      onClick={async () => {
+                        setIsSyncingLiveCalls(true);
+                        try {
+                          await fetch(`/api/quo/sync-live-calls?project=${projectId}`, { method: 'POST' }).catch(() => {});
+                          await fetchSpamShield({ forceSync: true });
+                          setStatusNotice('Synced latest live calls from Quo & Twilio!');
+                          setTimeout(() => setStatusNotice(null), 3000);
+                        } finally {
+                          setIsSyncingLiveCalls(false);
+                        }
+                      }}
+                      className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-black text-xs cursor-pointer shadow-lg flex items-center gap-1.5 transition-all"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isSyncingLiveCalls ? 'animate-spin' : ''}`} />
+                      <span>{isSyncingLiveCalls ? 'Syncing...' : '🔄 Sync Live Calls'}</span>
+                    </button>
+
+                    <span className="text-[11px] text-slate-400 font-mono">
+                      {lastLiveSyncTime}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Filter Pills & Search */}
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5 pt-2 border-t border-slate-800">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setLiveFeedFilter('ALL')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                        liveFeedFilter === 'ALL'
+                          ? 'bg-white text-slate-950 shadow-md'
+                          : 'bg-slate-800/90 text-slate-300 hover:bg-slate-700'
+                      }`}
+                    >
+                      <span>All Calls</span>
+                      <span className="px-1.5 py-0.5 rounded bg-slate-900/20 text-[10px] font-mono">
+                        {unifiedLiveCallStream.length}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setLiveFeedFilter('ALLOWED')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                        liveFeedFilter === 'ALLOWED'
+                          ? 'bg-emerald-500 text-slate-950 shadow-md'
+                          : 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-900/60'
+                      }`}
+                    >
+                      <span>✅ Not Blocked / Allowed</span>
+                      <span className="px-1.5 py-0.5 rounded bg-black/20 text-[10px] font-mono">
+                        {liveAllowedTotal}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setLiveFeedFilter('BLOCKED')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                        liveFeedFilter === 'BLOCKED'
+                          ? 'bg-rose-600 text-white shadow-md'
+                          : 'bg-rose-950/60 text-rose-300 border border-rose-500/40 hover:bg-rose-900/60'
+                      }`}
+                    >
+                      <span>🚫 Blocked by Shield</span>
+                      <span className="px-1.5 py-0.5 rounded bg-black/20 text-[10px] font-mono">
+                        {liveBlockedTotal}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setLiveFeedFilter('REPEAT')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                        liveFeedFilter === 'REPEAT'
+                          ? 'bg-amber-500 text-slate-950 shadow-md'
+                          : 'bg-amber-950/60 text-amber-300 border border-amber-500/40 hover:bg-amber-900/60'
+                      }`}
+                    >
+                      <span>🔁 Multiple Calls in a Row</span>
+                      <span className="px-1.5 py-0.5 rounded bg-black/20 text-[10px] font-mono">
+                        {liveRepeatTotal}
+                      </span>
+                    </button>
+                  </div>
+
+                  <div className="relative w-full md:w-64">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={liveFeedSearch}
+                      onChange={(e) => setLiveFeedSearch(e.target.value)}
+                      placeholder="Filter by phone, area code, name..."
+                      className="w-full bg-slate-950/90 border border-slate-700 focus:border-emerald-400 text-white placeholder-slate-500 pl-8 pr-7 py-1.5 rounded-xl text-xs font-mono focus:outline-none"
+                    />
+                    {liveFeedSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setLiveFeedSearch('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs cursor-pointer"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Live Call Rows */}
+                {filteredLiveCallStream.length === 0 ? (
+                  <div className="p-6 rounded-2xl bg-slate-950/70 border border-slate-800 text-center space-y-1.5">
+                    <PhoneCall className="w-7 h-7 text-slate-500 mx-auto" />
+                    <p className="text-xs font-bold text-slate-300">
+                      No incoming calls match the current filter.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-[540px] overflow-y-auto pr-1">
+                    {filteredLiveCallStream.map((call) => {
+                      const isAlbertaArea = ['780', '587', '825', '403', '368'].includes(call.areaCode);
+                      const isExpanded = Boolean(expandedTranscriptIds[call.id]);
+                      return (
+                        <div
+                          key={call.id}
+                          className={`p-3.5 rounded-2xl border-2 transition-all ${
+                            call.isBlocked
+                              ? 'bg-rose-950/35 border-rose-500/60 hover:border-rose-400'
+                              : 'bg-slate-950/85 border-emerald-500/40 hover:border-emerald-400'
+                          }`}
+                        >
+                          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+                            <div className="space-y-1 min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span
+                                  className={`px-2.5 py-0.5 rounded-lg text-[11px] font-black uppercase tracking-wider flex items-center gap-1 ${
+                                    call.isBlocked
+                                      ? 'bg-rose-600 text-white'
+                                      : call.isWhitelisted
+                                      ? 'bg-emerald-400 text-slate-950'
+                                      : 'bg-emerald-600 text-white'
+                                  }`}
+                                >
+                                  {call.isBlocked ? '🚫 BLOCKED' : call.isWhitelisted ? '✅ WHITELISTED' : '✅ NOT BLOCKED (ALLOWED)'}
+                                </span>
+
+                                <span className="font-mono font-black text-sm text-white">
+                                  {call.prettyPhone}
+                                </span>
+
+                                <span className="text-[11px] font-extrabold text-slate-200 bg-slate-800/90 px-2 py-0.5 rounded-md border border-slate-700">
+                                  {call.callerName}
+                                </span>
+
+                                {call.areaCode && (
+                                  <span
+                                    className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold border ${
+                                      isAlbertaArea
+                                        ? 'bg-indigo-950/80 text-indigo-300 border-indigo-500/40'
+                                        : 'bg-amber-950/80 text-amber-300 border-amber-500/40'
+                                    }`}
+                                  >
+                                    Area: {call.areaCode} {isAlbertaArea ? '(AB)' : ''}
+                                  </span>
+                                )}
+
+                                {call.repeatCount >= 2 && (
+                                  <span className="px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-400/60 text-amber-300 text-[10px] font-black">
+                                    🔁 {call.repeatCount}x Calls in a Row
+                                  </span>
+                                )}
+
+                                <span className="text-[11px] font-mono text-slate-400">
+                                  • {formatRelativeTime(call.timestamp)} ({new Date(call.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                                <span className="text-slate-300">
+                                  📞 Dialed: <strong className="text-white">{call.dialedLine}</strong>
+                                </span>
+                                <span className="text-slate-600">|</span>
+                                <span className={`font-bold ${call.isBlocked ? 'text-rose-300' : 'text-emerald-300'}`}>
+                                  {call.blockReason}
+                                </span>
+                                {typeof call.duration === 'number' && call.duration > 0 && (
+                                  <>
+                                    <span className="text-slate-600">|</span>
+                                    <span className="font-mono text-slate-400">⏱ {call.duration}s</span>
+                                  </>
+                                )}
+                              </div>
+
+                              {(call.summary || call.transcriptText) && (
+                                <div className="pt-1">
+                                  {call.summary && (
+                                    <p className="text-[11px] text-slate-300 bg-slate-900/90 border border-slate-800 rounded-xl px-2.5 py-1.5">
+                                      <strong className="text-amber-300">Summary:</strong> {call.summary}
+                                    </p>
+                                  )}
+                                  {call.transcriptText && (
+                                    <div className="mt-1">
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setExpandedTranscriptIds((prev) => ({
+                                            ...prev,
+                                            [call.id]: !prev[call.id],
+                                          }))
+                                        }
+                                        className="text-[10px] font-black text-indigo-300 hover:text-indigo-200 underline cursor-pointer"
+                                      >
+                                        {isExpanded ? '▼ Hide Transcript' : '▶ View Full Transcript'}
+                                      </button>
+                                      {isExpanded && (
+                                        <pre className="mt-1 p-2.5 rounded-xl bg-black/70 border border-slate-800 text-[10px] text-slate-200 font-mono whitespace-pre-wrap max-h-40 overflow-y-auto">
+                                          {call.transcriptText}
+                                        </pre>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+                              {call.isBlocked ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (call.rawQuoCall) {
+                                        handleToggleScreenedCallBlock(call.rawQuoCall, false);
+                                      } else {
+                                        handleUnblockItem(call.callerPhone, 'number');
+                                      }
+                                    }}
+                                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs cursor-pointer shadow-md flex items-center gap-1"
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    <span>✅ Unblock</span>
+                                  </button>
+                                  {call.matchedPrefix && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUnblockItem(call.matchedPrefix!, 'prefix')}
+                                      className="px-2.5 py-1.5 rounded-xl bg-teal-700 hover:bg-teal-600 text-white font-black text-[11px] cursor-pointer"
+                                    >
+                                      Unblock {call.matchedPrefix}
+                                    </button>
+                                  )}
+                                </>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (call.rawQuoCall) {
+                                        handleToggleScreenedCallBlock(call.rawQuoCall, true);
+                                      } else {
+                                        handleBlockItem(
+                                          call.callerPhone,
+                                          'number',
+                                          `Blocked from Live Call Feed (${call.prettyPhone})`
+                                        );
+                                      }
+                                    }}
+                                    className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs cursor-pointer shadow-md flex items-center gap-1"
+                                  >
+                                    <PhoneOff className="w-3.5 h-3.5" />
+                                    <span>🚫 Block Number</span>
+                                  </button>
+
+                                  {call.areaCode && call.areaCode.length === 3 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (isAlbertaArea) {
+                                          setQuickBlockInput(call.callerPhone);
+                                          setStatusNotice(
+                                            `Note: ${call.areaCode} is a local Alberta area code. Blocked exact number ${call.prettyPhone} instead.`
+                                          );
+                                          handleBlockItem(
+                                            call.callerPhone,
+                                            'number',
+                                            `Blocked caller (${call.prettyPhone})`
+                                          );
+                                          return;
+                                        }
+                                        handleBlockItem(
+                                          call.areaCode,
+                                          'areacode',
+                                          `Blocked Area Code ${call.areaCode} from Live Call Feed`
+                                        );
+                                      }}
+                                      className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-rose-700 text-rose-200 hover:text-white border border-rose-500/40 font-black text-[11px] cursor-pointer"
+                                    >
+                                      🚫 Block Area ({call.areaCode}*)
+                                    </button>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 1: ROTATING NUMBERS & PREFIXES */}
+          {activeTab === 'PREFIXES' && (
+            <div className="space-y-5 animate-fadeIn">
+              {/* Highlight callout for repetitive spammers with rotating numbers */}
+              <div className="p-4 rounded-2xl bg-[#1d1622] border border-purple-900/60 text-purple-200 shadow-sm text-xs leading-relaxed flex items-start gap-3">
+                <div className="w-6 h-6 rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center shrink-0 mt-0.5">
+                  <Zap className="w-3.5 h-3.5" />
+                </div>
+                <div>
+                  <div className="font-bold text-sm text-purple-300">
+                    How to stop spammers calling over and over from different numbers:
+                  </div>
+                  <div className="text-[12px] text-purple-200/90 mt-1">
+                    Automated robocallers and repetitive telemarketers rotate their last 4 digits on every call to bypass simple number blocking. 
+                    However, they almost always share the same <strong>Area Code or 6-digit Prefix (e.g. 1-844-*, 1-800-*, or local 780-999-*)</strong>. 
+                    Adding the prefix pattern below blocks <strong>all rotating numbers from that caller instantly</strong>!
+                  </div>
+                </div>
+              </div>
+
+              {/* Add New Prefix Box */}
+              <div className="bg-[#151926] p-4 sm:p-5 rounded-2xl border border-slate-800 space-y-3">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <Plus className="w-4 h-4 text-rose-400" />
+                  <span>Block a Rotating Prefix or Area Code</span>
+                </h3>
+                <div className="flex flex-col sm:flex-row items-center gap-2.5">
+                  <div className="relative flex-1 w-full">
+                    <input
+                      type="text"
+                      placeholder="e.g. 1844, 844, 1800, 780999, or 587400*"
+                      value={newPrefixInput}
+                      onChange={(e) => setNewPrefixInput(e.target.value)}
+                      className="w-full pl-3.5 pr-3 py-2.5 bg-[#0f121d] border border-slate-700/80 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500"
+                    />
+                  </div>
+                  <button
+                    onClick={() => {
+                      let clean = newPrefixInput.trim().replace(/\D/g, '');
+                      if (!clean) return;
+                      if (!clean.endsWith('*')) clean = `${clean}*`;
+                      handleBlockItem(clean, 'prefix', `Blocked rotating numbers matching pattern ${clean}`);
+                    }}
+                    className="w-full sm:w-auto px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
+                  >
+                    <ShieldAlert className="w-4 h-4" />
+                    <span>Block Rotating Prefix</span>
+                  </button>
+                </div>
+
+                {/* Quick Add Buttons for Common Robocall Prefixes */}
+                <div>
+                  <div className="text-[11px] text-slate-400 mb-2 font-semibold">
+                    1-Click Block Common Telemarketer Toll-Free Ranges:
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {PRESET_SPAM_PREFIXES.map((p) => {
+                      const isAlreadyBlocked = config.blockedPrefixes.some((bp) => bp.replace(/\D/g, '') === p.pattern.replace(/\D/g, ''));
+                      return (
+                        <button
+                          key={p.pattern}
+                          onClick={() => {
+                            if (!isAlreadyBlocked) {
+                              handleBlockItem(p.pattern, 'prefix', `Blocked toll-free robocalls (${p.label})`);
+                            }
+                          }}
+                          disabled={isAlreadyBlocked}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer border ${
+                            isAlreadyBlocked
+                              ? 'bg-rose-950/40 border-rose-900/60 text-rose-300 opacity-70 cursor-default'
+                              : 'bg-[#1b2030] hover:bg-[#252b40] text-slate-200 border-slate-700/70'
+                          }`}
+                        >
+                          <Hash className="w-3 h-3 text-rose-400" />
+                          <span>{p.label}</span>
+                          {isAlreadyBlocked && <Check className="w-3 h-3 text-rose-400" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Active Blocked Prefixes List */}
+              <div className="bg-[#151926] p-4 sm:p-5 rounded-2xl border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                    Active Blocked Prefix Rules ({config.blockedPrefixes.length})
+                  </h3>
+                  <span className="text-[11px] text-slate-500">
+                    Incoming calls starting with these digits will be dropped
+                  </span>
+                </div>
+
+                {config.blockedPrefixes.length === 0 ? (
+                  <div className="p-6 text-center text-slate-500 text-xs">
+                    No rotating prefix rules active. Add a prefix pattern above to block spammers rotating numbers.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                    {config.blockedPrefixes.map((prefix) => (
+                      <div
+                        key={prefix}
+                        className="p-3 bg-[#111420] border border-slate-800 rounded-xl flex items-center justify-between gap-2 shadow-xs group hover:border-rose-500/40 transition-all"
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-lg bg-rose-500/20 text-rose-400 flex items-center justify-center font-mono text-xs font-bold">
+                            #
+                          </div>
+                          <div>
+                            <div className="font-mono text-xs font-bold text-white">
+                              {prefix}
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              Rejects any number starting with this
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleUnblockItem(prefix, 'prefix')}
+                          className="p-1.5 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-slate-800 transition-all cursor-pointer"
+                          title="Remove prefix rule"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 2: COUNTRY CODES */}
+          {activeTab === 'COUNTRIES' && (
+            <div className="space-y-5 animate-fadeIn">
+              {/* Master Country Toggle: Block All Non-North America */}
+              <div className="p-5 rounded-2xl bg-gradient-to-r from-blue-950/70 to-indigo-950/70 border border-blue-800/80 shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <Globe className="w-5 h-5 text-blue-400" />
+                    <h3 className="font-extrabold text-sm text-white">
+                      Block All Non-North American Calls (+1 Canada &amp; US Only)
+                    </h3>
+                  </div>
+                  <p className="text-xs text-blue-200/80 max-w-xl leading-relaxed">
+                    Recommended for local Edmonton &amp; Canadian cleaning services. Drops 100% of overseas calls (India, Nigeria, UK, Russia, China, etc.) before your phone line rings.
+                  </p>
+                </div>
+
+                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={config.blockAllNonNorthAmerica}
+                    onChange={(e) => handleSaveConfig({ blockAllNonNorthAmerica: e.target.checked })}
+                    className="sr-only peer"
+                  />
+                  <div className="w-12 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+
+              {/* Specific Country Code Blacklist */}
+              <div className="bg-[#151926] p-4 sm:p-5 rounded-2xl border border-slate-800 space-y-4">
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                    1-Click Add Frequent Spam Country Codes
+                  </h3>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    Block specific international prefixes if you keep overseas calling enabled
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                  {PRESET_SPAM_COUNTRIES.map((c) => {
+                    const isBlocked = config.blockedCountryCodes.includes(c.code);
+                    return (
+                      <button
+                        key={c.code}
+                        onClick={() => {
+                          if (isBlocked) {
+                            handleUnblockItem(c.code, 'country');
+                          } else {
+                            handleBlockItem(c.code, 'country', `Blocked Country: ${c.name} (${c.code})`);
+                          }
+                        }}
+                        className={`p-2.5 rounded-xl border text-left transition-all flex items-center justify-between cursor-pointer ${
+                          isBlocked
+                            ? 'bg-rose-950/40 border-rose-800/80 text-rose-200'
+                            : 'bg-[#121522] border-slate-800 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-base">{c.flag}</span>
+                          <div>
+                            <div className="font-bold text-xs">{c.name}</div>
+                            <div className="font-mono text-[10px] text-slate-400">{c.code}</div>
+                          </div>
+                        </div>
+                        {isBlocked ? (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-400">
+                            Blocked
+                          </span>
+                        ) : (
+                          <span className="text-slate-500 text-xs">+</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Custom Country Code Input */}
+                <div className="pt-2 border-t border-slate-800 flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="Enter custom country code (e.g. +33, +34, +49)"
+                    value={newCountryInput}
+                    onChange={(e) => setNewCountryInput(e.target.value)}
+                    className="flex-1 px-3 py-2 bg-[#0f121d] border border-slate-700/80 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                  />
+                  <button
+                    onClick={() => {
+                      let code = newCountryInput.trim();
+                      if (!code.startsWith('+')) code = `+${code}`;
+                      handleBlockItem(code, 'country', `Blocked Country Code ${code}`);
+                    }}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold cursor-pointer"
+                  >
+                    Add Country Block
+                  </button>
+                </div>
+              </div>
+
+              {/* Active Blocked Countries */}
+              <div className="bg-[#151926] p-4 sm:p-5 rounded-2xl border border-slate-800 space-y-3">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                  Currently Blacklisted Country Codes ({config.blockedCountryCodes.length})
+                </h3>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {config.blockedCountryCodes.map((code) => {
+                    const preset = PRESET_SPAM_COUNTRIES.find((p) => p.code === code);
+                    return (
+                      <span
+                        key={code}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-xs font-bold text-slate-200"
+                      >
+                        <span>{preset?.flag || '🌐'}</span>
+                        <span>{preset?.name || 'Country'}</span>
+                        <span className="font-mono text-rose-400">{code}</span>
+                        <button
+                          onClick={() => handleUnblockItem(code, 'country')}
+                          className="ml-1 text-slate-400 hover:text-white cursor-pointer"
+                          title="Unblock country"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: BLACKLISTED NUMBERS */}
+          {activeTab === 'NUMBERS' && (
+            <div className="space-y-5 animate-fadeIn">
+              {/* Add Single Number Form */}
+              <div className="bg-[#151926] p-4 sm:p-5 rounded-2xl border border-slate-800 space-y-3">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <Plus className="w-4 h-4 text-amber-400" />
+                  <span>Blacklist an Exact Phone Number</span>
+                </h3>
+                <div className="flex flex-col sm:flex-row items-center gap-2.5">
+                  <input
+                    type="text"
+                    placeholder="Enter exact caller phone (e.g. +1 780 555 0199 or 800-555-0123)"
+                    value={newNumberInput}
+                    onChange={(e) => setNewNumberInput(e.target.value)}
+                    className="w-full sm:flex-1 px-3.5 py-2.5 bg-[#0f121d] border border-slate-700/80 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                  />
+                  <button
+                    onClick={() => {
+                      if (!newNumberInput.trim()) return;
+                      handleBlockItem(newNumberInput.trim(), 'number', 'Manually blocked from Spam Shield');
+                    }}
+                    className="w-full sm:w-auto px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
+                  >
+                    <PhoneOff className="w-4 h-4" />
+                    <span>Blacklist Number</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Blacklisted Numbers List */}
+              <div className="bg-[#151926] p-4 sm:p-5 rounded-2xl border border-slate-800 space-y-3.5">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                    Exact Blocked Numbers ({config.blockedNumbers.length})
+                  </h3>
+                  <span className="text-[11px] text-slate-500">
+                    Search any number below without scrolling through the list
+                  </span>
+                </div>
+
+                {/* Search / Filter Blocked Numbers Input */}
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={blockedNumberSearch}
+                    onChange={(e) => {
+                      setBlockedNumberSearch(e.target.value);
+                      setQuickBlockInput(e.target.value);
+                    }}
+                    placeholder="Search blocked list by phone number (e.g. 7807603033) to check if blocked..."
+                    className="w-full pl-8 pr-8 py-2 bg-[#0f121d] border border-slate-700/80 rounded-xl text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                  />
+                  {blockedNumberSearch && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBlockedNumberSearch('');
+                        setQuickBlockInput('');
+                      }}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs font-bold cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                {(() => {
+                  const filterDigits = normalizePhone10(blockedNumberSearch);
+                  const rawFilter = blockedNumberSearch.trim().toLowerCase();
+                  const filteredList = config.blockedNumbers.filter((num) => {
+                    if (!rawFilter) return true;
+                    const numNorm = normalizePhone10(num);
+                    return (
+                      (filterDigits && numNorm.includes(filterDigits)) ||
+                      String(num).toLowerCase().includes(rawFilter)
+                    );
+                  });
+
+                  if (rawFilter && filteredList.length === 0) {
+                    return (
+                      <div className="p-4 rounded-xl bg-emerald-950/60 border border-emerald-500/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                        <div>
+                          <div className="font-black text-emerald-300 text-sm">
+                            ✅ NOT IN BLOCKED LIST: {formatPhonePretty(blockedNumberSearch)}
+                          </div>
+                          <p className="text-slate-300 mt-0.5">
+                            <code className="font-mono text-white">{blockedNumberSearch}</code> is not in your Blocked Numbers list. Click <strong>Unblock / Whitelist</strong> to ensure it is never blocked, or <strong>Block</strong> to add it.
+                          </p>
+                        </div>
+                        {filterDigits.length >= 7 && (
+                          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => handleUnblockItem(blockedNumberSearch.trim(), 'number')}
+                              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs cursor-pointer shrink-0 shadow-md flex items-center gap-1.5"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>✅ Unblock / Whitelist {formatPhonePretty(blockedNumberSearch)}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleBlockItem(
+                                  blockedNumberSearch.trim(),
+                                  'number',
+                                  `Blocked from search (${formatPhonePretty(blockedNumberSearch)})`
+                                )
+                              }
+                              className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs cursor-pointer shrink-0 shadow-md flex items-center gap-1.5"
+                            >
+                              <PhoneOff className="w-3.5 h-3.5" />
+                              <span>🚫 Block {formatPhonePretty(blockedNumberSearch)}</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  if (config.blockedNumbers.length === 0) {
+                    return (
+                      <div className="p-8 text-center text-slate-500 text-xs">
+                        No individual numbers blacklisted yet.
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="divide-y divide-slate-800/80 max-h-[380px] overflow-y-auto pr-1">
+                      {filteredList.map((num) => (
+                        <div
+                          key={num}
+                          className={`py-3 px-2 rounded-lg flex items-center justify-between gap-3 text-xs ${
+                            rawFilter ? 'bg-rose-950/40' : ''
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-7 h-7 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center">
+                              <PhoneOff className="w-3.5 h-3.5" />
+                            </div>
+                            <div>
+                              <div className="font-mono font-bold text-white">{num}</div>
+                              <div className="text-[11px] text-slate-400">
+                                {rawFilter ? '🚫 Matching Blocked Number' : 'Blacklisted phone caller'}
+                              </div>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => handleUnblockItem(num, 'number')}
+                            className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-emerald-700 text-slate-300 hover:text-white text-[11px] font-bold transition-all cursor-pointer"
+                          >
+                            Unblock
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 4: BLOCKED CALLS LOG */}
+          {activeTab === 'LOGS' && (
+            <div className="space-y-4 animate-fadeIn">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-bold text-sm text-white">
+                    Live Audit Log of Dropped Robocalls
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Real-time log of spam calls intercepted and rejected by your Twilio webhook
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => fetchSpamShield()}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                    <span>Refresh</span>
+                  </button>
+                  {history.length > 0 && (
+                    <button
+                      onClick={handleClearHistory}
+                      className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-rose-900/60 text-slate-300 hover:text-rose-200 text-xs font-bold transition-all cursor-pointer"
+                    >
+                      Clear Log
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {history.length === 0 ? (
+                <div className="bg-[#151926] p-8 rounded-2xl border border-slate-800 text-center space-y-2">
+                  <ShieldCheck className="w-10 h-10 text-emerald-400 mx-auto opacity-70" />
+                  <div className="text-sm font-bold text-slate-300">No Blocked Calls Logged Yet</div>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                    When spam numbers, blocked country codes, or matching prefixes call your Twilio number, they will appear here with full timestamps.
+                  </p>
+                </div>
+              ) : (
+                <div className="bg-[#151926] border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-[#10131f] border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+                        <tr>
+                          <th className="py-3 px-4">Timestamp</th>
+                          <th className="py-3 px-4">Caller ID &amp; Number</th>
+                          <th className="py-3 px-4">Country Code</th>
+                          <th className="py-3 px-4">Rejection Reason</th>
+                          <th className="py-3 px-4 text-right">Action Taken</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60">
+                        {history.map((call) => {
+                          const dateObj = new Date(call.timestamp);
+                          const formattedTime = !isNaN(dateObj.getTime())
+                            ? `${dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} at ${dateObj.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
+                            : call.timestamp;
+
+                          return (
+                            <tr key={call.id} className="hover:bg-[#191e2e]/50 transition-colors">
+                              <td className="py-3 px-4 font-mono text-[11px] text-slate-400 whitespace-nowrap">
+                                {formattedTime}
+                              </td>
+                              <td className="py-3 px-4">
+                                <div className="font-mono font-bold text-white">{call.callerNumber}</div>
+                                {call.callerName && (
+                                  <div className="text-[11px] text-slate-400">{call.callerName}</div>
+                                )}
+                              </td>
+                              <td className="py-3 px-4">
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-slate-800 text-blue-300">
+                                  {call.countryCode || '+1'}
+                                </span>
+                              </td>
+                              <td className="py-3 px-4 text-rose-300 font-medium">
+                                {call.reason}
+                              </td>
+                              <td className="py-3 px-4 text-right">
+                                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                                  Busy Tone Played (0 Ring)
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 5: TEST SIMULATOR & WEBHOOK */}
+          {activeTab === 'TEST' && (
+            <div className="space-y-5 animate-fadeIn">
+              {/* Test Phone Number Simulator */}
+              <div className="bg-[#151926] p-5 rounded-2xl border border-slate-800 space-y-4">
+                <div>
+                  <h3 className="font-bold text-sm text-white flex items-center gap-2">
+                    <Zap className="w-4 h-4 text-emerald-400" />
+                    <span>Real-Time Phone Number Shield Simulator</span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Paste any spam caller's phone number to test immediately against your country rules, prefixes, and blacklists.
+                  </p>
+                </div>
+
+                <form onSubmit={handleRunTest} className="flex flex-col sm:flex-row items-center gap-2.5">
+                  <input
+                    type="text"
+                    placeholder="Enter phone to test (e.g. +91 98200 12345 or 1-844-932-8819)"
+                    value={testNumberInput}
+                    onChange={(e) => setTestNumberInput(e.target.value)}
+                    className="w-full sm:flex-1 px-3.5 py-2.5 bg-[#0f121d] border border-slate-700/80 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isTesting}
+                    className="w-full sm:w-auto px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isTesting ? 'animate-spin' : ''}`} />
+                    <span>{isTesting ? 'Evaluating...' : 'Test Shield Rules'}</span>
+                  </button>
+                </form>
+
+                {/* Test Verdict Display */}
+                {testResult && (
+                  <div
+                    className={`p-4 rounded-2xl border text-xs leading-relaxed animate-fadeIn ${
+                      testResult.isBlocked
+                        ? 'bg-rose-950/60 border-rose-800 text-rose-200'
+                        : 'bg-emerald-950/60 border-emerald-800 text-emerald-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {testResult.isBlocked ? (
+                        <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0" />
+                      ) : (
+                        <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
+                      )}
+                      <span className="font-extrabold text-sm">
+                        {testResult.isBlocked
+                          ? `BLOCKED: Caller will be rejected (${testResult.action || 'Busy tone'})`
+                          : 'ALLOWED: Caller will connect to Dispatch Line'}
+                      </span>
+                    </div>
+
+                    <div className="mt-2 text-xs font-mono">
+                      Reason: <strong className="underline">{testResult.reason}</strong>
+                    </div>
+
+                    {testResult.twimlPreview && (
+                      <div className="mt-3 p-3 bg-black/40 rounded-xl font-mono text-[11px] text-slate-300 border border-slate-800">
+                        <div className="text-[10px] text-slate-500 mb-1">Generated Twilio Voice XML (TwiML):</div>
+                        <pre className="overflow-x-auto">{testResult.twimlPreview}</pre>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Call Routing & Quo Line Forwarding */}
+              <div className="bg-[#151926] p-5 rounded-2xl border border-slate-800 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Phone className="w-4 h-4 text-emerald-400" />
+                    <h3 className="font-bold text-sm text-white">Call Routing &amp; Quo Line Forwarding</h3>
+                  </div>
+                  <span className="text-[11px] text-emerald-400 font-semibold flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Active Route</span>
+                  </span>
+                </div>
+
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  When an incoming call passes the Spam Shield (it's a clean caller, not a spammer or robocaller), Twilio immediately dials and forwards the live call to your Quo phone number or dispatch line. Spammers and blocked countries are dropped instantly before your phone ever rings.
+                </p>
+
+                <div className="flex flex-col sm:flex-row items-center gap-2.5">
+                  <div className="w-full sm:flex-1">
+                    <input
+                      type="text"
+                      placeholder="Enter your Quo phone number (e.g. +15879007223)"
+                      value={forwardNumberInput}
+                      onChange={(e) => setForwardNumberInput(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-[#0f121d] border border-slate-700/80 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleSaveConfig({ forwardDestinationNumber: forwardNumberInput.trim() })}
+                    className="w-full sm:w-auto px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shrink-0 shadow-md"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Save Quo Destination</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Twilio Voice Webhook Configuration */}
+              <div className="bg-[#151926] p-5 rounded-2xl border border-slate-800 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <FileCode className="w-4 h-4 text-violet-400" />
+                    <h3 className="font-bold text-sm text-white">Twilio Voice Webhook Endpoint</h3>
+                  </div>
+                  <span className="text-[11px] text-slate-400">HTTP POST / GET supported</span>
+                </div>
+
+                <div className="flex items-center gap-2 bg-[#0f121d] p-2.5 rounded-xl border border-slate-800">
+                  <span className="font-mono text-xs text-violet-300 flex-1 truncate select-all">
+                    {webhookUrl}
+                  </span>
+                  <button
+                    onClick={handleCopyWebhook}
+                    className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shrink-0"
+                  >
+                    {copiedWebhook ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedWebhook ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
+
+                <div className="p-3 bg-[#111420] rounded-xl border border-slate-800 text-xs text-slate-400 space-y-2 leading-relaxed">
+                  <p>
+                    <strong>How Spam Shield Protects Your Quo Numbers:</strong>
+                  </p>
+                  <p>
+                    1. In <strong>Twilio Console</strong> → <em>Phone Numbers</em> → <em>Manage</em> → <em>Active Numbers</em>, choose your incoming number.
+                  </p>
+                  <p>
+                    2. Under <strong>Voice &amp; Fax</strong>, set <em>"A CALL COMES IN"</em> to <strong>Webhook</strong> and paste the endpoint URL above.
+                  </p>
+                  <p>
+                    3. Robocallers, international spoofers, and 1-800 telemarketers are dropped instantly (zero rings, zero voicemail spam).
+                  </p>
+                  <p>
+                    4. Genuine customers are forwarded directly to your Quo phone line (<span className="text-emerald-400 font-mono">{forwardNumberInput || '+15879007223'}</span>).
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 6: PRICING & 6-LINE STRATEGY */}
+          {activeTab === 'COST_LINES' && (
+            <div className="space-y-6 animate-fadeIn">
+              {/* Connected Status Card if lines are mapped */}
+              {uniqueMappings.length > 0 && (
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950/60 via-slate-900 to-[#121622] border border-emerald-500/40 text-slate-200 shadow-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                      <CheckCircle2 className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-bold text-sm text-white">
+                          All {uniqueMappings.length} Lines Live &amp; Protected by Twilio Shield
+                        </h4>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/20 text-emerald-300 uppercase tracking-wide flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+                          LIVE
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-300 mt-0.5">
+                        Webhook configured across your numbers. Spam is dropped free, and genuine calls route 1-to-1 to your Quo inboxes.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('TEST')}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer self-start sm:self-auto shrink-0 shadow-md"
+                  >
+                    <Zap className="w-3.5 h-3.5 text-amber-300" />
+                    <span>Test Simulator</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Top Summary Banner */}
+              <div className="p-5 rounded-2xl bg-gradient-to-r from-amber-950/40 via-purple-950/30 to-slate-900 border border-amber-500/30 text-slate-200 shadow-xl space-y-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold">
+                    <DollarSign className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-base text-white">Twilio Forwarding Costs vs. Retail Services</h3>
+                    <p className="text-xs text-amber-200/80">The short answer: Twilio is raw carrier wholesale, not marked-up retail pricing.</p>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Unlike traditional answering services or call-forwarding software that charge <strong>$0.50 to $1.50 per minute</strong> (or $100+/mo flat fees), Twilio charges wholesale carrier rates: <strong>~$0.0225 per minute</strong> (~2.2 cents) total when a call connects and forwards.
+                </p>
+                <div className="p-3 bg-emerald-950/40 border border-emerald-500/30 rounded-xl flex items-center gap-3">
+                  <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
+                  <div className="text-xs text-emerald-200">
+                    <strong>Critical Cost Advantage:</strong> Calls blocked by the Spam Shield (robocallers, international spoofers, 1-800 telemarketers) cost <strong className="text-white underline">$0.00</strong>. Twilio drops them before connection, so zero forward minutes are ever billed!
+                  </div>
+                </div>
+              </div>
+
+              {/* Interactive Cost Estimator */}
+              <div className="bg-[#151926] p-5 rounded-2xl border border-slate-800 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <TrendingDown className="w-4 h-4 text-emerald-400" />
+                    <h4 className="font-bold text-sm text-white">Live Monthly Cost Estimator</h4>
+                  </div>
+                  <span className="text-[11px] text-slate-400">Carrier wholesale rate: ~$0.0225/min connected</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-3 bg-[#0f121d] p-4 rounded-xl border border-slate-800">
+                    <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
+                      <span>Monthly Connected Talk Minutes:</span>
+                      <span className="text-emerald-400 font-bold font-mono text-sm">{calcMinutes} mins (~{(calcMinutes / 60).toFixed(1)} hrs)</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="100"
+                      max="4000"
+                      step="50"
+                      value={calcMinutes}
+                      onChange={(e) => setCalcMinutes(Number(e.target.value))}
+                      className="w-full accent-emerald-500 cursor-pointer"
+                    />
+                    <div className="flex items-center gap-2 pt-1 text-[11px] text-slate-400">
+                      <span>Presets:</span>
+                      {[250, 500, 1000, 2000, 3000].map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => setCalcMinutes(m)}
+                          className={`px-2 py-0.5 rounded text-[10px] font-mono transition-all ${
+                            calcMinutes === m ? 'bg-emerald-600 text-white font-bold' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                          }`}
+                        >
+                          {m}m
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 bg-[#0f121d] p-4 rounded-xl border border-slate-800">
+                    <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
+                      <span>Spam Robocalls Dropped by Shield:</span>
+                      <span className="text-rose-400 font-bold font-mono text-sm">{calcBlockedCalls} robocalls</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="50"
+                      max="1500"
+                      step="25"
+                      value={calcBlockedCalls}
+                      onChange={(e) => setCalcBlockedCalls(Number(e.target.value))}
+                      className="w-full accent-rose-500 cursor-pointer"
+                    />
+                    <div className="flex items-center gap-2 pt-1 text-[11px] text-slate-400">
+                      <span>Presets:</span>
+                      {[150, 350, 750, 1200].map((c) => (
+                        <button
+                          key={c}
+                          type="button"
+                          onClick={() => setCalcBlockedCalls(c)}
+                          className={`px-2 py-0.5 rounded text-[10px] font-mono transition-all ${
+                            calcBlockedCalls === c ? 'bg-rose-600 text-white font-bold' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                          }`}
+                        >
+                          {c}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Calculation Result Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
+                  <div className="p-3 bg-[#111420] rounded-xl border border-slate-800">
+                    <div className="text-[10px] uppercase font-bold text-slate-500">Inbound Twilio Rate</div>
+                    <div className="text-sm font-black text-slate-300 font-mono mt-0.5">
+                      ${(calcMinutes * 0.0085).toFixed(2)}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">@ $0.0085 / min</div>
+                  </div>
+
+                  <div className="p-3 bg-[#111420] rounded-xl border border-slate-800">
+                    <div className="text-[10px] uppercase font-bold text-slate-500">Outbound Forward</div>
+                    <div className="text-sm font-black text-slate-300 font-mono mt-0.5">
+                      ${(calcMinutes * 0.014).toFixed(2)}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">@ $0.014 / min</div>
+                  </div>
+
+                  <div className="p-3 bg-[#111420] rounded-xl border border-slate-800">
+                    <div className="text-[10px] uppercase font-bold text-slate-500">Blocked Robocalls</div>
+                    <div className="text-sm font-black text-emerald-400 font-mono mt-0.5">
+                      $0.00
+                    </div>
+                    <div className="text-[10px] text-emerald-500/80 mt-0.5">{calcBlockedCalls} calls dropped free</div>
+                  </div>
+
+                  <div className="p-3 bg-emerald-950/30 rounded-xl border border-emerald-500/40">
+                    <div className="text-[10px] uppercase font-bold text-emerald-400">Total Twilio Estimate</div>
+                    <div className="text-base font-black text-emerald-300 font-mono mt-0.5">
+                      ${(calcMinutes * 0.0225 + 1.15).toFixed(2)}<span className="text-[10px] font-normal text-slate-400">/mo</span>
+                    </div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">Includes $1.15 number fee</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* The 6-Line Strategy (No Hectic Merging) */}
+              <div className="bg-[#151926] p-5 rounded-2xl border border-slate-800 space-y-4">
+                <div className="flex items-center gap-2">
+                  <Split className="w-4 h-4 text-purple-400" />
+                  <h4 className="font-bold text-sm text-white">
+                    "Will forwarding 6 different phone lines get hectic?"
+                  </h4>
+                </div>
+
+                <div className="p-4 bg-purple-950/20 border border-purple-800/40 rounded-xl text-xs text-purple-200/90 leading-relaxed space-y-2">
+                  <p>
+                    <strong>You are 100% right:</strong> Blindly dumping 6 phone lines into 1 single destination would create chaos. You have multiple numbers for marketing attribution (tracking Google Ads, Door Hangers, GMB Direct, Toll Free, and Dispatch).
+                  </p>
+                  <p>
+                    Here is how to set up your phone lines smoothly with <strong>zero confusion</strong>:
+                  </p>
+                </div>
+
+                {/* 3 Clear Architecture Approaches */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 pt-1">
+                  {/* Option 1 */}
+                  <div className="p-4 bg-[#0f121d] rounded-xl border border-emerald-500/40 space-y-2.5 relative">
+                    <div className="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 uppercase">
+                      Option 1 (Recommended &amp; 100% Free)
+                    </div>
+                    <h5 className="font-bold text-xs text-white">Keep all 6 lines in Quo/OpenPhone</h5>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      You do <strong>NOT</strong> have to forward lines to Twilio! In OpenPhone, enable <em>"Call Screening"</em> or set up a simple 1-key auto-attendant (<em>"Press 1 for Dispatch"</em>). Robocalls cannot press 1, so 99% of spam dies instantly for <strong>$0 extra</strong>.
+                    </p>
+                    <div className="text-[11px] text-emerald-400 font-semibold flex items-center gap-1 pt-1">
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Zero extra bills, all inboxes stay separate</span>
+                    </div>
+                  </div>
+
+                  {/* Option 2 */}
+                  <div className="p-4 bg-[#0f121d] rounded-xl border border-amber-500/40 space-y-2.5">
+                    <div className="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 uppercase">
+                      Option 2 (Surgical Shield)
+                    </div>
+                    <h5 className="font-bold text-xs text-white">Shield ONLY the 1 high-spam line</h5>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Usually 90% of spam comes to just <strong>one public line</strong> (like your Toll-Free 1-833 or Google My Business number). Keep your other 5 lines directly on Quo, and put the Twilio Spam Shield only on that single spam magnet.
+                    </p>
+                    <div className="text-[11px] text-amber-300 font-semibold flex items-center gap-1 pt-1">
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Only 1 line touched, zero disruption to others</span>
+                    </div>
+                  </div>
+
+                  {/* Option 3 */}
+                  <div className="p-4 bg-[#0f121d] rounded-xl border border-blue-500/40 space-y-2.5">
+                    <div className="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-blue-500/20 text-blue-300 uppercase">
+                      Option 3 (1-to-1 Mapping)
+                    </div>
+                    <h5 className="font-bold text-xs text-white">Individual 1-to-1 Twilio lines</h5>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      If you ever route multiple lines through Twilio, our system maps each Twilio number 1-to-1 to its matching Quo line. Twilio preserves the dialed line so your screen always tells you which marketing campaign was dialed.
+                    </p>
+                    <div className="text-[11px] text-blue-300 font-semibold flex items-center gap-1 pt-1">
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Full attribution preserved for each campaign</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Display Current 6 Quo Marketing Lines */}
+                <div className="p-4 bg-[#0f121d] rounded-xl border border-slate-800 space-y-2.5 mt-2">
+                  <div className="text-xs font-bold text-slate-300 flex items-center justify-between">
+                    <span>Your Current 6 Quo (OpenPhone) Marketing Lines:</span>
+                    <span className="text-[11px] text-slate-500 font-normal">All 6 active and paired to your Twilio Shield numbers</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 pt-1 text-xs">
+                    <div className="p-2.5 bg-[#141824] rounded-lg border border-slate-800/80">
+                      <div className="font-semibold text-white">Tidyups Cleaning &amp; Jobber (Main)</div>
+                      <div className="font-mono text-emerald-400 text-[11px]">+1 (587) 416-9181</div>
+                    </div>
+                    <div className="p-2.5 bg-[#141824] rounded-lg border border-slate-800/80">
+                      <div className="font-semibold text-white">Tidyups Cleaning - GMB Direct</div>
+                      <div className="font-mono text-emerald-400 text-[11px]">+1 (587) 900-7223</div>
+                    </div>
+                    <div className="p-2.5 bg-[#141824] rounded-lg border border-slate-800/80">
+                      <div className="font-semibold text-white">Cleaning Services Ads</div>
+                      <div className="font-mono text-emerald-400 text-[11px]">+1 (587) 742-2500</div>
+                    </div>
+                    <div className="p-2.5 bg-[#141824] rounded-lg border border-slate-800/80">
+                      <div className="font-semibold text-white">Primary Dispatch</div>
+                      <div className="font-mono text-emerald-400 text-[11px]">+1 (587) 570-8005</div>
+                    </div>
+                    <div className="p-2.5 bg-[#141824] rounded-lg border border-slate-800/80">
+                      <div className="font-semibold text-white">Toll Free TIDYUPS</div>
+                      <div className="font-mono text-emerald-400 text-[11px]">+1 (833) 843-9877</div>
+                    </div>
+                    <div className="p-2.5 bg-[#141824] rounded-lg border border-slate-800/80">
+                      <div className="font-semibold text-white">Door Hangers &amp; Signs</div>
+                      <div className="font-mono text-emerald-400 text-[11px]">+1 (587) 602-7792</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 1-to-1 Line Router & Twilio Multi-Line Manager */}
+                <div className="bg-[#151926] p-5 rounded-2xl border border-slate-800 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Split className="w-4 h-4 text-emerald-400" />
+                      <h4 className="font-bold text-sm text-white">Active 1-to-1 Line Routes</h4>
+                    </div>
+                    <span className="text-[11px] text-emerald-400 font-mono font-semibold bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                      {uniqueMappings.length} lines connected
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    When someone dials any of your Twilio numbers, the Spam Shield filters robocalls instantly. Genuine customer calls route 1-to-1 to that specific number's Quo destination, keeping each marketing campaign separate in OpenPhone.
+                  </p>
+
+                  {/* Caller ID Presentation Selector */}
+                  <div className="p-3.5 bg-[#0f121d] rounded-xl border border-slate-800 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <PhoneCall className="w-4 h-4 text-sky-400" />
+                        <span className="text-xs font-bold text-white">Caller ID on Incoming Calls:</span>
+                      </div>
+                      <span className="text-[11px] text-slate-400">Controls what appears on your phone screen</span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => handleSaveConfig({ callerIdMode: 'caller' })}
+                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                          (config.callerIdMode || 'caller') === 'caller'
+                            ? 'bg-sky-950/40 border-sky-500/60 text-sky-200'
+                            : 'bg-[#141824] border-slate-800 text-slate-400 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between font-bold text-white mb-1">
+                          <span className="flex items-center gap-1.5">
+                            <span>Customer's Phone Number</span>
+                            <span className="text-[10px] text-emerald-400 bg-emerald-500/20 px-1.5 py-0.2 rounded font-normal">Recommended</span>
+                          </span>
+                          {(config.callerIdMode || 'caller') === 'caller' && <Check className="w-3.5 h-3.5 text-sky-400" />}
+                        </div>
+                        <p className="text-[11px] leading-relaxed text-slate-400">
+                          Shows the customer's phone number and caller ID so you can tap Call Back, text them, or see their contact history. Because each line forwards to a unique Quo line, Quo still labels the campaign.
+                        </p>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleSaveConfig({ callerIdMode: 'line' })}
+                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                          config.callerIdMode === 'line'
+                            ? 'bg-purple-950/40 border-purple-500/60 text-purple-200'
+                            : 'bg-[#141824] border-slate-800 text-slate-400 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between font-bold text-white mb-1">
+                          <span>Twilio Line Number</span>
+                          {config.callerIdMode === 'line' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                        </div>
+                        <p className="text-[11px] leading-relaxed text-slate-400">
+                          Displays your dialed Twilio number on incoming calls. Useful if answering on a standard cell phone outside the Quo app.
+                        </p>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Quick 1-Click 4-Line Setup Presets */}
+                  <div className="p-3.5 bg-emerald-950/25 rounded-xl border border-emerald-500/40 space-y-2.5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-black text-emerald-300">
+                          1-Click 4-Line Shield Routing Setup (~$40/mo for 4 Shielded Lines)
+                        </div>
+                        <p className="text-[11px] text-slate-300 mt-0.5">
+                          Choose how your 4 main lines (<strong>GMB 7223</strong>, <strong>Main 9181</strong>, <strong>Ads 2500</strong>, <strong>Toll-Free 9877</strong>) route after passing the Twilio Spam Shield:
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const fourLineBounceBack: Record<string, string> = {
+                              '+15872063733': '+15875708005',
+                              '+15879063015': '+15875708005',
+                              '+15878050247': '+15875708005',
+                              '+18886145145': '+15875708005',
+                            };
+                            handleSaveConfig({
+                              lineMappings: fourLineBounceBack,
+                              forwardDestinationNumber: '+15875708005',
+                            });
+                            setStatusNotice('4-Line Quo ➔ Twilio Shield ➔ Quo Primary Dispatch (+15875708005) active!');
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-extrabold cursor-pointer shadow transition-all"
+                        >
+                          4 Lines ➔ Quo Dispatch (587-570-8005)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const fourLineDirect: Record<string, string> = {
+                              '+15872063733': '+15879007223',
+                              '+15879063015': '+15874169181',
+                              '+15878050247': '+15877422500',
+                              '+18886145145': '+18338439877',
+                            };
+                            handleSaveConfig({
+                              lineMappings: fourLineDirect,
+                              forwardDestinationNumber: '+15879007223',
+                            });
+                            setStatusNotice('4-Line 1-to-1 Twilio ➔ Quo Inboxes (7223, 9181, 2500, 9877) active!');
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-extrabold cursor-pointer shadow transition-all"
+                        >
+                          4 Lines ➔ 1-to-1 Quo Inboxes
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Active Mappings Table */}
+                  <div className="space-y-2">
+                    {uniqueMappings.length === 0 ? (
+                      <div className="p-4 bg-[#0f121d] rounded-xl border border-dashed border-slate-800 text-center space-y-2">
+                        <p className="text-xs text-slate-400">
+                          No custom 1-to-1 line pairs added yet. All allowed callers currently route to your default destination (<span className="text-emerald-400 font-mono">{config.forwardDestinationNumber || '+15879007223'}</span>).
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          Use the form below to pair your Twilio lines to their matching Quo lines, or reply with your numbers and I will set them up for you.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {uniqueMappings.map(({ inbound, target, allKeys }) => {
+                          const campaignLabel = getQuoLineLabel(target);
+                          return (
+                            <div
+                              key={inbound}
+                              className="p-3 bg-[#0f121d] rounded-xl border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 hover:border-slate-700 transition-all"
+                            >
+                              <div className="flex flex-wrap items-center gap-2.5 text-xs">
+                                <div className="px-2.5 py-1 bg-violet-500/20 text-violet-300 rounded-lg font-mono font-semibold flex items-center gap-1.5">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-violet-400"></span>
+                                  <span>Twilio: {inbound}</span>
+                                </div>
+                                <ArrowRight className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                                <select
+                                  value={target}
+                                  onChange={(e) => {
+                                    const newTarget = e.target.value;
+                                    const updated = { ...(config.lineMappings || {}) };
+                                    if (allKeys && allKeys.length > 0) {
+                                      allKeys.forEach((k) => delete updated[k]);
+                                    }
+                                    updated[inbound] = newTarget;
+                                    handleSaveConfig({ lineMappings: updated });
+                                  }}
+                                  className="px-2.5 py-1 bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 rounded-lg font-mono font-semibold text-xs cursor-pointer focus:outline-none"
+                                >
+                                  <option value="+15879007223" className="bg-slate-900 text-emerald-300">Quo: +15879007223 (GMB Direct)</option>
+                                  <option value="+15874169181" className="bg-slate-900 text-emerald-300">Quo: +15874169181 (Main / Jobber)</option>
+                                  <option value="+15877422500" className="bg-slate-900 text-emerald-300">Quo: +15877422500 (Cleaning Ads)</option>
+                                  <option value="+18338439877" className="bg-slate-900 text-emerald-300">Quo: +18338439877 (Toll Free TIDYUPS)</option>
+                                  <option value="+15875708005" className="bg-slate-900 text-emerald-300">Quo: +15875708005 (Primary Dispatch)</option>
+                                  <option value="+15876027792" className="bg-slate-900 text-emerald-300">Quo: +15876027792 (Door Hangers &amp; Signs)</option>
+                                  <option value="+17807185092" className="bg-slate-900 text-emerald-300">Direct: +17807185092 (Richard Direct)</option>
+                                </select>
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
+                                  {campaignLabel}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setTestDialedLine(inbound);
+                                    setActiveTab('TEST');
+                                  }}
+                                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1"
+                                >
+                                  <Zap className="w-3 h-3 text-amber-400" />
+                                  <span>Simulate</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveLineMapping(inbound, allKeys)}
+                                  className="p-1.5 bg-rose-500/20 hover:bg-rose-500/40 text-rose-300 rounded-lg transition-all cursor-pointer"
+                                  title="Delete Route"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Add New Line Pair Form */}
+                  <div className="p-4 bg-[#0f121d] rounded-xl border border-slate-800 space-y-3">
+                    <div className="text-xs font-bold text-slate-300">Pair a Twilio Line to a Quo Destination:</div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="text-[11px] text-slate-400 block mb-1">Inbound Twilio Number:</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. +1 (587) 742-2500"
+                          value={mapTwilioNumber}
+                          onChange={(e) => setMapTwilioNumber(e.target.value)}
+                          className="w-full px-3 py-2 bg-[#141824] border border-slate-700 rounded-lg text-xs text-white font-mono placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] text-slate-400 block mb-1">Target Quo (OpenPhone) Line:</label>
+                        <select
+                          value={mapQuoNumber}
+                          onChange={(e) => setMapQuoNumber(e.target.value)}
+                          className="w-full px-3 py-2 bg-[#141824] border border-slate-700 rounded-lg text-xs text-white font-mono focus:outline-none focus:border-emerald-500 cursor-pointer"
+                        >
+                          <option value="+15879007223">+1 (587) 900-7223 (Tidyups Cleaning - GMB Direct)</option>
+                          <option value="+15874169181">+1 (587) 416-9181 (Tidyups Cleaning &amp; Jobber Main)</option>
+                          <option value="+15877422500">+1 (587) 742-2500 (Cleaning Services Ads)</option>
+                          <option value="+15875708005">+1 (587) 570-8005 (Primary Dispatch)</option>
+                          <option value="+18338439877">+1 (833) 843-9877 (Toll Free TIDYUPS)</option>
+                          <option value="+15876027792">+1 (587) 602-7792 (Door Hangers &amp; Signs)</option>
+                          <option value="+17807185092">+1 (780) 718-5092 (Richard Direct / Forwarding Line)</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between pt-1">
+                      <span className="text-[11px] text-slate-500">Pick any of your 6 Quo lines to pair 1-to-1</span>
+                      <button
+                        type="button"
+                        onClick={handleAddLineMapping}
+                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-md"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Save 1-to-1 Route</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Twilio Setup Instructions Card */}
+                  <div className="p-4 bg-[#111420] rounded-xl border border-slate-800 text-xs text-slate-300 space-y-2.5 leading-relaxed">
+                    <div className="font-bold text-white flex items-center gap-1.5">
+                      <FileCode className="w-4 h-4 text-violet-400" />
+                      <span>How to configure multiple lines in your Twilio Console (Takes 1 minute):</span>
+                    </div>
+                    <p className="text-slate-400">
+                      <strong>Great news:</strong> You use the <strong>exact same webhook URL</strong> on all 3, 4, or 6 of your Twilio numbers! When someone dials any number, Twilio passes the dialed number to our backend, which automatically matches the correct 1-to-1 route above.
+                    </p>
+                    <div className="flex items-center gap-2 bg-[#0a0d15] p-2.5 rounded-lg border border-slate-800">
+                      <span className="font-mono text-xs text-violet-300 flex-1 truncate select-all">{webhookUrl}</span>
+                      <button
+                        onClick={handleCopyWebhook}
+                        className="px-2.5 py-1 rounded bg-violet-600 hover:bg-violet-500 text-white text-[11px] font-bold transition-all flex items-center gap-1 cursor-pointer shrink-0"
+                      >
+                        {copiedWebhook ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                        <span>{copiedWebhook ? 'Copied' : 'Copy'}</span>
+                      </button>
+                    </div>
+                    <ol className="list-decimal list-inside space-y-1 text-slate-400 text-[11px]">
+                      <li>In your <strong>Twilio Console</strong>, navigate to <strong>Phone Numbers → Manage → Active Numbers</strong>.</li>
+                      <li>Click into your first phone line (e.g. Ads Line).</li>
+                      <li>Under <strong>Voice Configuration ("A CALL COMES IN")</strong>, choose <strong>Webhook</strong> and paste the URL above. Click Save.</li>
+                      <li>Repeat the exact same step for your other 2 or 3 numbers.</li>
+                    </ol>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Modal Footer — Action Buttons Moved Here Beside Done / Close */}
+        <div className="px-4 sm:px-6 py-3 bg-[#161a28] border-t border-slate-800 flex flex-col md:flex-row items-center justify-between gap-2.5 shrink-0">
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+            <span>Real-time protection enabled for all incoming Twilio &amp; Quo calls</span>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap justify-end w-full md:w-auto">
+            <button
+              type="button"
+              onClick={() => fetchSpamShield()}
+              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-bold flex items-center gap-1.5 border border-slate-700 cursor-pointer transition-all"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+              <span>Refresh Live Calls</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('TEST')}
+              className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 border cursor-pointer transition-all ${
+                activeTab === 'TEST'
+                  ? 'bg-emerald-600 text-white border-emerald-500'
+                  : 'bg-slate-800 hover:bg-slate-700 text-emerald-300 border-slate-700'
+              }`}
+            >
+              <Zap className="w-3.5 h-3.5" />
+              <span>Live Tester &amp; Webhook</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('COST_LINES')}
+              className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 border cursor-pointer transition-all ${
+                activeTab === 'COST_LINES'
+                  ? 'bg-amber-600 text-white border-amber-500'
+                  : 'bg-slate-800 hover:bg-slate-700 text-amber-300 border-slate-700'
+              }`}
+            >
+              <DollarSign className="w-3.5 h-3.5" />
+              <span>Pricing &amp; 6-Line Strategy</span>
+            </button>
+
+            <button
+              onClick={onClose}
+              className="px-5 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-extrabold transition-all cursor-pointer shadow-md"
+            >
+              Done / Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
