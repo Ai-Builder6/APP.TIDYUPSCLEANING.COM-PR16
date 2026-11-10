@@ -637,19 +637,83 @@ function extractNumericJobberId(rawId?: string): string | null {
   return tailMatch ? tailMatch[1] : null;
 }
 
+export function isLeadDefaultInfo(lead: any): boolean {
+  if (!lead) return true;
+  if (lead.isDefaultQuoteInfo === true) return true;
+
+  const addrNorm = String(lead.address || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\.$/, '');
+  const hasRealStreetAddress =
+    Boolean(addrNorm) &&
+    addrNorm !== 'edmonton, ab' &&
+    addrNorm !== 'edmonton' &&
+    addrNorm !== 'edmonton, alberta' &&
+    addrNorm !== 'st. albert, ab' &&
+    addrNorm !== 'st albert, ab' &&
+    addrNorm !== 'sherwood park, ab' &&
+    (/\d/.test(addrNorm) || Boolean(String(lead.postalCode || '').trim()));
+
+  if (lead.isDefaultQuoteInfo === false && hasRealStreetAddress) {
+    return false;
+  }
+
+  if (
+    lead.hasVerifiedBedrooms === false ||
+    lead.hasVerifiedBathrooms === false ||
+    lead.hasVerifiedAddress === false
+  ) {
+    return true;
+  }
+
+  const labelLower = String(lead.defaultInfoLabel || '').toLowerCase();
+  if (labelLower.includes('default') || labelLower.includes('placeholder') || labelLower.includes('not real')) {
+    return true;
+  }
+
+  const serviceStr = String(lead.serviceRequested || '');
+  const nameStr = String(lead.customerName || '').trim();
+  const notesStr = String(lead.notes || '');
+
+  if (
+    serviceStr.includes('Potential Cleaning Job') ||
+    serviceStr.includes('Default') ||
+    serviceStr.includes('Unverified') ||
+    nameStr.startsWith('Potential Job Caller') ||
+    nameStr.startsWith('Cleaning Caller') ||
+    nameStr.startsWith('(') ||
+    nameStr.toLowerCase() === 'inbound ad lead' ||
+    notesStr.includes('Default 3B/2B') ||
+    notesStr.includes('DEFAULT PLACEHOLDER QUOTE INFO')
+  ) {
+    return true;
+  }
+
+  if (!hasRealStreetAddress) {
+    return true;
+  }
+
+  if (!lead.quoteId && !lead.quoteNumber && lead.leadVerdict === 'POTENTIAL_JOB') {
+    return true;
+  }
+
+  return false;
+}
+
 const SHEET_COLUMNS = [
   { header: 'Date Received', key: 'date', width: 14 },
-  { header: 'Sheet Tab', key: 'sheetTab', width: 20 },
+  { header: 'Sheet Tab & Info ID', key: 'sheetTab', width: 26 },
   { header: 'Source / Campaign', key: 'source', width: 24 },
-  { header: 'Client Name', key: 'customerName', width: 24 },
+  { header: 'Client Name', key: 'customerName', width: 28 },
   { header: 'Phone Number', key: 'phone', width: 18 },
   { header: 'Email Address', key: 'email', width: 25 },
   { header: 'Street Address', key: 'address', width: 28 },
   { header: 'City', key: 'city', width: 14 },
   { header: 'Postal Code', key: 'postalCode', width: 13 },
-  { header: 'Bedrooms', key: 'bedrooms', width: 14 },
-  { header: 'Bathrooms', key: 'bathrooms', width: 14 },
-  { header: 'Service Requested', key: 'serviceRequested', width: 28 },
+  { header: 'Bedrooms', key: 'bedrooms', width: 18 },
+  { header: 'Bathrooms', key: 'bathrooms', width: 18 },
+  { header: 'Service Requested', key: 'serviceRequested', width: 32 },
   { header: 'Quoted Total ($)', key: 'quotedAmount', width: 16 },
   { header: 'Communicated?', key: 'communicated', width: 16 },
   { header: 'Jobber Quote #', key: 'quoteNumber', width: 16 },
@@ -700,9 +764,11 @@ function styleWorksheetWithTheme(
   ws.mergeCells('A2:S2');
   const kpiCell = ws.getCell('A2');
   const totalQuoted = rows.reduce((sum, l) => sum + (Number(l.quotedAmount ?? 0) || 0), 0);
-  kpiCell.value = `📊 Active Leads in Tab: ${rows.length}   |   💰 Total Quoted Value: $${totalQuoted.toFixed(
+  const defaultedCount = rows.filter((l) => isLeadDefaultInfo(l)).length;
+  const realClientCount = rows.length - defaultedCount;
+  kpiCell.value = `📊 Active Leads in Tab: ${rows.length} (✓ ${realClientCount} Real Client Info • 🏷️ ${defaultedCount} Default Info)   |   💰 Total Quoted Value: $${totalQuoted.toFixed(
     2
-  )} CAD   |   🕒 Rules: Max 14 Days Old (7 Days if Uncommunicated)   |   🔗 See "Archived Old Sheets" Tab for Historical Sheets   |   ${subtitle}`;
+  )} CAD   |   🕒 Rules: Max 14 Days Old (7 Days if Uncommunicated)   |   ${subtitle}`;
   kpiCell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FF0F172A' } };
   kpiCell.fill = {
     type: 'pattern',
@@ -744,6 +810,8 @@ function styleWorksheetWithTheme(
     const palette = TAB_THEME_PALETTES[tabName] || TAB_THEME_PALETTES['Other Ads'];
     const isEven = idx % 2 === 0;
     const rowBgArgb = isEven ? palette.rowEvenBgArgb : palette.rowOddBgArgb;
+    const isDefault = isLeadDefaultInfo(lead);
+    const infoPlacardBadge = isDefault ? '🏷️ DEFAULT INFO' : '✓ REAL CLIENT INFO';
 
     const matchedQuote = Array.isArray(quotes)
       ? quotes.find((q) => q && (q.id === lead.quoteId || (lead.quoteNumber && q.quoteNumber === lead.quoteNumber)))
@@ -754,27 +822,39 @@ function styleWorksheetWithTheme(
     const communicated = hasLeadBeenCommunicatedWith(lead);
     const dateStr = String(lead.dateReceived || lead.createdAt || new Date().toISOString()).slice(0, 10);
 
+    const cleanBed = String(lead.bedrooms || '3 Bedrooms').replace(/\s*\(Default.*?\)/i, '');
+    const cleanBath = String(lead.bathrooms || '2 Bathrooms').replace(/\s*\(Default.*?\)/i, '');
+    const rawAddr = String(lead.address || 'Edmonton, AB');
+    const addrDisplay =
+      isDefault && (rawAddr.toLowerCase() === 'edmonton, ab' || rawAddr.toLowerCase() === 'edmonton')
+        ? `${rawAddr} (Default Info)`
+        : rawAddr;
+
     const row = ws.getRow(rowNumber);
     row.values = [
       dateStr,
-      `${palette.icon} ${tabName}`,
+      `${palette.icon} ${tabName} • [${infoPlacardBadge}]`,
       lead.source || lead.campaignName || tabName,
-      lead.customerName || '',
+      isDefault ? `${lead.customerName || ''} [🏷️ DEFAULT INFO]` : lead.customerName || '',
       lead.phone || '',
       lead.email || '',
-      lead.address || 'Edmonton, AB',
+      addrDisplay,
       lead.city || 'Edmonton',
       lead.postalCode || '',
-      lead.bedrooms || '3 Bedrooms',
-      lead.bathrooms || '2 Bathrooms',
-      lead.serviceRequested || 'Residential Cleaning',
+      isDefault ? `${cleanBed} (Default Info)` : cleanBed,
+      isDefault ? `${cleanBath} (Default Info)` : cleanBath,
+      isDefault
+        ? `[🏷️ DEFAULT INFO] ${lead.serviceRequested || 'Residential Cleaning'}`
+        : lead.serviceRequested || 'Residential Cleaning',
       lead.quotedAmount !== undefined && lead.quotedAmount !== null ? Number(lead.quotedAmount) : 0,
       communicated ? '✅ Yes (Communicated)' : '⏳ Needs Follow-Up (<7d)',
       lead.quoteNumber || '',
       quoteUrl ? { text: `Open Quote ${lead.quoteNumber || `#${numericQuoteId}`}`, hyperlink: quoteUrl } : '',
       lead.verdict || 'Good lead',
       lead.status || (communicated ? 'Contacted' : 'New'),
-      lead.notes || lead.callSummary || '',
+      isDefault
+        ? `[🏷️ DEFAULT INFO — Placeholder 3B/2B / Address Not Provided By Client] ${lead.notes || lead.callSummary || ''}`.trim()
+        : lead.notes || lead.callSummary || '',
     ];
     row.height = 22;
 
@@ -802,21 +882,46 @@ function styleWorksheetWithTheme(
         cell.fill = {
           type: 'pattern',
           pattern: 'solid',
-          fgColor: { argb: palette.badgeBgArgb },
+          fgColor: { argb: isDefault ? 'FFFEF3C7' : palette.badgeBgArgb },
         };
-        cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: palette.badgeFgArgb } };
+        cell.font = {
+          name: 'Calibri',
+          size: 10,
+          bold: true,
+          color: { argb: isDefault ? 'FF92400E' : palette.badgeFgArgb },
+        };
         cell.alignment = { vertical: 'middle', horizontal: 'center' };
       }
 
       // Bold Client Name (Column 4)
       if (colNumber === 4) {
-        cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FF0F172A' } };
+        cell.font = {
+          name: 'Calibri',
+          size: 10,
+          bold: true,
+          color: { argb: isDefault ? 'FF92400E' : 'FF0F172A' },
+        };
+      }
+
+      // Highlight Default Info on Bedrooms, Bathrooms & Service Requested (Columns 10, 11, 12)
+      if (isDefault && (colNumber === 10 || colNumber === 11 || colNumber === 12)) {
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFFEF3C7' },
+        };
+        cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FF92400E' } };
       }
 
       // Currency format on Quoted Total (Column 13)
       if (colNumber === 13) {
         cell.numFmt = '$#,##0.00';
-        cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FF065F46' } };
+        cell.font = {
+          name: 'Calibri',
+          size: 10,
+          bold: true,
+          color: { argb: isDefault ? 'FFB45309' : 'FF065F46' },
+        };
       }
 
       // Hyperlink styling on Jobber Quote Link (Column 16)

@@ -3994,14 +3994,43 @@ function repairAndSyncStoreData(store: AppPersistentStore): boolean {
       const customerName = String(ext.customerName || thread.customerName || "").trim();
       const phone = String(ext.phone || "").trim();
       const email = String(ext.email || "").trim();
-      const address = String(ext.address || "Edmonton, AB").trim();
-      if (!customerName || customerName.startsWith("FB Customer") || (!phone && !email)) {
+      const rawExtAddr = String(ext.address || "").trim();
+      const address = rawExtAddr || "Edmonton, AB";
+
+      const transcriptSummary = (thread.messages || [])
+        .map((m: any) => `${m.sender === "customer" ? "Customer" : m.sender === "owner" ? "Owner" : "AI"}: ${m.text}`)
+        .join(" | ");
+      const transcriptLower = transcriptSummary.toLowerCase();
+
+      // Exclude non-customer spam / job applications / 1-star review complaints
+      if (
+        !customerName ||
+        customerName.startsWith("FB Customer") ||
+        transcriptLower.includes("apply for any job offer") ||
+        transcriptLower.includes("1 star review")
+      ) {
+        continue;
+      }
+
+      const hasCustomerCleaningInquiry =
+        Boolean(phone || email) ||
+        /clean|price|quote|how much|bedroom|bath|move|carpet|house|condo/i.test(transcriptSummary);
+      if (!hasCustomerCleaningInquiry) {
         continue;
       }
 
       const leadId = thread.syncedLeadId || `fblead-${thread.id}`;
       thread.syncedLeadId = leadId;
       const threadCreatedIso = thread.createdAt || thread.updatedAt || new Date().toISOString();
+
+      const hasVerifiedBedrooms = Boolean(ext.bedrooms && String(ext.bedrooms).trim());
+      const hasVerifiedBathrooms = Boolean(ext.bathrooms && String(ext.bathrooms).trim());
+      const hasVerifiedAddress =
+        Boolean(rawExtAddr) &&
+        rawExtAddr.toLowerCase() !== "edmonton, ab" &&
+        rawExtAddr.toLowerCase() !== "edmonton" &&
+        (/\d/.test(rawExtAddr) || /[A-Z]\d[A-Z]\s*\d[A-Z]\d/i.test(rawExtAddr));
+      const isDefaultQuoteInfo = !(hasVerifiedBedrooms && hasVerifiedBathrooms && hasVerifiedAddress);
 
       const canonicalPkg = buildCanonicalQuoteBreakdown({
         service: ext.serviceType || "Move-Out Cleaning",
@@ -4014,10 +4043,6 @@ function repairAndSyncStoreData(store: AppPersistentStore): boolean {
         catalog: store.serviceCatalog || CANONICAL_SERVICE_CATALOG,
       });
 
-      const transcriptSummary = (thread.messages || [])
-        .map((m: any) => `${m.sender === "customer" ? "Customer" : m.sender === "owner" ? "Owner" : "AI"}: ${m.text}`)
-        .join(" | ");
-
       const candidateLead: any = {
         id: leadId,
         source: "Facebook AI",
@@ -4029,9 +4054,18 @@ function repairAndSyncStoreData(store: AppPersistentStore): boolean {
         address,
         city: address.toLowerCase().includes("st. albert") ? "St. Albert" : "Edmonton",
         postalCode: address.match(/[A-Z]\d[A-Z]\s*\d[A-Z]\d/i)?.[0]?.toUpperCase() || "",
-        serviceRequested: canonicalPkg.cleanItemName,
+        serviceRequested: isDefaultQuoteInfo
+          ? `${canonicalPkg.cleanItemName} (Default 3B/2B Base — Unverified)`
+          : canonicalPkg.cleanItemName,
         bedrooms: ext.bedrooms || "3 Bedrooms",
         bathrooms: ext.bathrooms || "2 Bathrooms",
+        isDefaultQuoteInfo,
+        hasVerifiedBedrooms,
+        hasVerifiedBathrooms,
+        hasVerifiedAddress,
+        defaultInfoLabel: isDefaultQuoteInfo
+          ? "🏷️ DEFAULT INFO — Default 3B/2B Placeholder (Not Real Client Info)"
+          : "✓ REAL CLIENT INFO",
         dateOfServiceRequested: ext.preferredDate || threadCreatedIso.slice(0, 10),
         dateReceived: threadCreatedIso,
         dateAdded: threadCreatedIso,
@@ -4041,7 +4075,7 @@ function repairAndSyncStoreData(store: AppPersistentStore): boolean {
         isJobberSynced: Boolean(thread.syncedQuoteNumber),
         quoteNumber: thread.syncedQuoteNumber || undefined,
         quotedAmount: canonicalPkg.total,
-        notes: `[${thread.pageName || "833 Tidyups"}] ${ext.specificNotes ? `${ext.specificNotes} | ` : ""}Messenger Transcript: ${transcriptSummary}`,
+        notes: `${isDefaultQuoteInfo ? "[🏷️ DEFAULT INFO — Client did not provide full Bed/Bath/Address] " : ""}[${thread.pageName || "833 Tidyups"}] ${ext.specificNotes ? `${ext.specificNotes} | ` : ""}Messenger Transcript: ${transcriptSummary}`,
       };
 
       if (isOutOfEdmontonOrFakeOrOutdatedLead(candidateLead)) {
@@ -4054,14 +4088,29 @@ function repairAndSyncStoreData(store: AppPersistentStore): boolean {
         mutated = true;
       } else {
         const prev = store.adLeads[existingIdx];
-        if (!prev.quotedAmount || prev.quotedAmount === 427.5 || prev.quotedAmount === 280) {
+        const prevWasCorruptedWithBanji =
+          leadId === "fblead-fb-thread-39727724163538447" &&
+          String(prev.customerName || "").toLowerCase().includes("banji");
+        if (
+          prevWasCorruptedWithBanji ||
+          prev.isDefaultQuoteInfo !== candidateLead.isDefaultQuoteInfo ||
+          prev.defaultInfoLabel !== candidateLead.defaultInfoLabel ||
+          !prev.quotedAmount ||
+          prev.quotedAmount === 427.5 ||
+          prev.quotedAmount === 280
+        ) {
           store.adLeads[existingIdx] = {
             ...prev,
             ...candidateLead,
-            quoteId: prev.quoteId || candidateLead.quoteId,
-            quoteNumber: prev.quoteNumber || candidateLead.quoteNumber,
-            isJobberSynced: Boolean(prev.isJobberSynced || candidateLead.isJobberSynced),
-            status: prev.quoteNumber || candidateLead.quoteNumber ? "Quoted" : prev.status || "New",
+            quoteId: prevWasCorruptedWithBanji ? candidateLead.quoteId : prev.quoteId || candidateLead.quoteId,
+            quoteNumber: prevWasCorruptedWithBanji ? candidateLead.quoteNumber : prev.quoteNumber || candidateLead.quoteNumber,
+            isJobberSynced: prevWasCorruptedWithBanji
+              ? Boolean(candidateLead.isJobberSynced)
+              : Boolean(prev.isJobberSynced || candidateLead.isJobberSynced),
+            status:
+              (prevWasCorruptedWithBanji ? candidateLead.quoteNumber : prev.quoteNumber || candidateLead.quoteNumber)
+                ? "Quoted"
+                : prev.status || "New",
           };
           mutated = true;
         }
@@ -5563,6 +5612,7 @@ function repairAndSyncStoreData(store: AppPersistentStore): boolean {
       }
 
       const banjiLead = (store.adLeads || []).find((l: any) => {
+        if (l?.sourceTab && l.sourceTab !== "Quo") return false;
         const lp = normalizePhoneDigits(l?.phone);
         const ln = String(l?.customerName || "").toLowerCase();
         return lp === "7806678742" || lp === "5875247323" || ln.includes("banji") || ln.includes("lekan");
@@ -5628,6 +5678,47 @@ function repairAndSyncStoreData(store: AppPersistentStore): boolean {
         if (String(l.customerName || "").startsWith("Unknown (")) {
           l.customerName = `Potential Job Caller ${l.phone}`;
         }
+
+        // Universal "Default Info" vs "Real Client Info" ID placard check across ALL 7 Clean Google Sheet tabs
+        const addrNorm = String(l.address || "")
+          .trim()
+          .toLowerCase()
+          .replace(/\.$/, "");
+        const hasRealStreetAddr =
+          Boolean(addrNorm) &&
+          addrNorm !== "edmonton, ab" &&
+          addrNorm !== "edmonton" &&
+          addrNorm !== "edmonton, alberta" &&
+          addrNorm !== "st. albert, ab" &&
+          addrNorm !== "st albert, ab" &&
+          addrNorm !== "sherwood park, ab" &&
+          (/\d/.test(addrNorm) || Boolean(String(l.postalCode || "").trim()));
+
+        const nameStr = String(l.customerName || "").trim();
+        const srvStr = String(l.serviceRequested || "");
+        const hasPlaceholderNameOrSrv =
+          srvStr.includes("Potential Cleaning Job") ||
+          srvStr.includes("Default") ||
+          srvStr.includes("Unverified") ||
+          nameStr.startsWith("Potential Job Caller") ||
+          nameStr.startsWith("Cleaning Caller") ||
+          nameStr.startsWith("(") ||
+          nameStr.toLowerCase() === "inbound ad lead" ||
+          l.hasVerifiedBedrooms === false ||
+          l.hasVerifiedBathrooms === false ||
+          l.hasVerifiedAddress === false;
+
+        const computedIsDefault = Boolean(!hasRealStreetAddr || hasPlaceholderNameOrSrv);
+        const computedLabel = computedIsDefault
+          ? "🏷️ DEFAULT INFO — Default 3B/2B Placeholder (Not Real Client Info)"
+          : "✓ REAL CLIENT INFO";
+
+        if (l.isDefaultQuoteInfo !== computedIsDefault || l.defaultInfoLabel !== computedLabel) {
+          l.isDefaultQuoteInfo = computedIsDefault;
+          l.defaultInfoLabel = computedLabel;
+          mutated = true;
+        }
+
         return true;
       });
       store.adLeads.sort((a: any, b: any) => String(b.dateReceived || "").localeCompare(String(a.dateReceived || "")));
@@ -9197,18 +9288,30 @@ const handleInboundLeadWebhook = (forcedPlatform?: string) => (req: any, res: an
   const email = String(
     body.email || body.clientEmail || colMap["email"] || colMap["user_email"] || ""
   ).trim();
-  const address = String(
+  const rawWebhookAddr = String(
     body.address ||
       body.street_address ||
       colMap["street_address"] ||
       colMap["address"] ||
       colMap["postal_code"] ||
-      "Edmonton, AB"
+      ""
   ).trim();
+  const address = rawWebhookAddr || "Edmonton, AB";
   const city = String(body.city || colMap["city"] || "Edmonton").trim();
   const postalCode = String(body.post_code || body.postalCode || colMap["postal_code"] || "").trim();
-  const bedrooms = String(body.bedrooms || colMap["bedrooms"] || "3 Bedrooms").trim();
-  const bathrooms = String(body.bathrooms || colMap["bathrooms"] || "2 Bathrooms").trim();
+  const rawWebhookBed = String(body.bedrooms || colMap["bedrooms"] || "").trim();
+  const rawWebhookBath = String(body.bathrooms || colMap["bathrooms"] || "").trim();
+  const bedrooms = rawWebhookBed || "3 Bedrooms";
+  const bathrooms = rawWebhookBath || "2 Bathrooms";
+  const hasVerifiedBedrooms = Boolean(rawWebhookBed);
+  const hasVerifiedBathrooms = Boolean(rawWebhookBath);
+  const hasVerifiedAddress =
+    Boolean(rawWebhookAddr) &&
+    rawWebhookAddr.toLowerCase() !== "edmonton, ab" &&
+    rawWebhookAddr.toLowerCase() !== "edmonton" &&
+    (/\d/.test(rawWebhookAddr) || Boolean(postalCode));
+  const isDefaultQuoteInfo = !(hasVerifiedBedrooms && hasVerifiedBathrooms && hasVerifiedAddress);
+
   const serviceRequested = String(
     body.service || body.serviceRequested || colMap["service"] || "Move-Out Cleaning"
   ).trim();
@@ -9239,9 +9342,16 @@ const handleInboundLeadWebhook = (forcedPlatform?: string) => (req: any, res: an
     address,
     city,
     postalCode,
-    serviceRequested,
+    serviceRequested: isDefaultQuoteInfo ? `${serviceRequested} (Default 3B/2B Info)` : serviceRequested,
     bedrooms,
     bathrooms,
+    isDefaultQuoteInfo,
+    hasVerifiedBedrooms,
+    hasVerifiedBathrooms,
+    hasVerifiedAddress,
+    defaultInfoLabel: isDefaultQuoteInfo
+      ? "🏷️ DEFAULT INFO — Default 3B/2B Placeholder (Not Real Client Info)"
+      : "✓ REAL CLIENT INFO",
     dateOfServiceRequested: requestedDate,
     source: source as any,
     sourceTab,
@@ -9253,7 +9363,7 @@ const handleInboundLeadWebhook = (forcedPlatform?: string) => (req: any, res: an
     quoteId,
     quoteNumber,
     quotedAmount,
-    notes: body.message || body.notes || `Received via ${sourceTab} Webhook`,
+    notes: `${isDefaultQuoteInfo ? "[🏷️ DEFAULT INFO] " : ""}${body.message || body.notes || `Received via ${sourceTab} Webhook`}`,
     missingPhone: !phone,
     googleSheetSynced: true,
     googleSheetUrl: googleSheetsSyncState.sheetUrl,
@@ -9548,20 +9658,30 @@ function extractLeadsFromSheetMatrix(params: {
       continue;
     }
 
-    const rawAddr =
-      getByHeader("street address", "street_address", "property_address", "address", "street") ||
-      "Edmonton, AB";
+    const rawAddrFromSheet = getByHeader("street address", "street_address", "property_address", "address", "street").replace(/\s*\(Default.*?\)/i, "").trim();
+    const rawAddr = rawAddrFromSheet || "Edmonton, AB";
     const rawCity = getByHeader("city", "municipality") || "Edmonton";
     const rawPostal = getByHeader("postal code", "post_code", "postal_code", "zip_code", "postal") || "";
     const rawService =
-      getByHeader("service package", "service_requested", "service", "cleaning_type", "type_of_cleaning", "package") ||
+      getByHeader("service package", "service_requested", "service", "cleaning_type", "type_of_cleaning", "package").replace(/^\[🏷️ DEFAULT INFO\]\s*/i, "").trim() ||
       "Residential Cleaning";
-    const rawBed = getByHeader("bedrooms", "bedroom", "how_many_bedrooms", "bed") || "3 Bedrooms";
-    const rawBath = getByHeader("bathrooms", "bathroom", "how_many_bathrooms", "bath") || "2 Bathrooms";
+    const rawBedFromSheet = getByHeader("bedrooms", "bedroom", "how_many_bedrooms", "bed").replace(/\s*\(Default.*?\)/i, "").trim();
+    const rawBathFromSheet = getByHeader("bathrooms", "bathroom", "how_many_bathrooms", "bath").replace(/\s*\(Default.*?\)/i, "").trim();
+    const rawBed = rawBedFromSheet || "3 Bedrooms";
+    const rawBath = rawBathFromSheet || "2 Bathrooms";
+
+    const hasVerifiedBedrooms = Boolean(rawBedFromSheet);
+    const hasVerifiedBathrooms = Boolean(rawBathFromSheet);
+    const hasVerifiedAddress =
+      Boolean(rawAddrFromSheet) &&
+      rawAddrFromSheet.toLowerCase() !== "edmonton, ab" &&
+      rawAddrFromSheet.toLowerCase() !== "edmonton" &&
+      (/\d/.test(rawAddrFromSheet) || Boolean(rawPostal));
+    const isDefaultQuoteInfo = !(hasVerifiedBedrooms && hasVerifiedBathrooms && hasVerifiedAddress);
 
     const platformCol = getByHeader("platform", "ad_name", "form_name");
     const rawSourceCell =
-      getByHeader("sheet tab", "source_tab", "lead source", "source") ||
+      getByHeader("sheet tab & info id", "sheet tab", "source_tab", "lead source", "source") ||
       (platformCol ? `Facebook Lead Ads (${platformCol})` : "") ||
       tabName ||
       "FB Leads";
@@ -9604,7 +9724,7 @@ function extractLeadsFromSheetMatrix(params: {
           ? rowExternalId
           : `lead-sheet-${Date.now().toString(36)}-${newlyImportedLeads.length + 1}`,
       externalLeadId: rowExternalId || undefined,
-      customerName: rawName,
+      customerName: rawName.replace(/\s*\[🏷️ DEFAULT INFO\]/i, "").trim(),
       phone: rawPhone,
       email: rawEmail,
       address: rawAddr,
@@ -9613,6 +9733,13 @@ function extractLeadsFromSheetMatrix(params: {
       serviceRequested: rawService,
       bedrooms: /^\d+$/.test(rawBed) ? `${rawBed} Bedrooms` : rawBed,
       bathrooms: /^\d+(\.\d+)?$/.test(rawBath) ? `${rawBath} Bathrooms` : rawBath,
+      isDefaultQuoteInfo,
+      hasVerifiedBedrooms,
+      hasVerifiedBathrooms,
+      hasVerifiedAddress,
+      defaultInfoLabel: isDefaultQuoteInfo
+        ? "🏷️ DEFAULT INFO — Default 3B/2B Placeholder (Not Real Client Info)"
+        : "✓ REAL CLIENT INFO",
       dateOfServiceRequested: requestedDate,
       source: source as any,
       sourceTab,
@@ -10396,18 +10523,31 @@ app.post(["/api/leads", "/api/leads/add"], async (req, res) => {
       createdQuotesCount++;
     }
 
+    const resolvedAddr = address !== "Edmonton, AB" ? address : existingLeadObj?.address || address;
+    const resolvedPostal = postalCode || existingLeadObj?.postalCode || "";
+    const hasRealAddr =
+      Boolean(resolvedAddr) &&
+      resolvedAddr.trim().toLowerCase() !== "edmonton, ab" &&
+      resolvedAddr.trim().toLowerCase() !== "edmonton" &&
+      (/\d/.test(resolvedAddr) || Boolean(resolvedPostal));
+    const isDefaultQuoteInfo = item.isDefaultQuoteInfo !== undefined ? Boolean(item.isDefaultQuoteInfo) : !hasRealAddr;
+
     const newLeadRow = {
       ...(existingLeadObj || {}),
       id: existingLeadObj?.id || item.id || `lead-clean-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       customerName: customerName !== "New Lead" ? customerName : existingLeadObj?.customerName || customerName,
       phone: phone || existingLeadObj?.phone || "",
       email: email || existingLeadObj?.email || "",
-      address: address !== "Edmonton, AB" ? address : existingLeadObj?.address || address,
+      address: resolvedAddr,
       city: city || existingLeadObj?.city || "Edmonton",
-      postalCode: postalCode || existingLeadObj?.postalCode || "",
+      postalCode: resolvedPostal,
       serviceRequested,
       bedrooms,
       bathrooms,
+      isDefaultQuoteInfo,
+      defaultInfoLabel: isDefaultQuoteInfo
+        ? "🏷️ DEFAULT INFO — Default 3B/2B Placeholder (Not Real Client Info)"
+        : "✓ REAL CLIENT INFO",
       dateOfServiceRequested: item.dateOfServiceRequested || existingLeadObj?.dateOfServiceRequested || new Date().toISOString().slice(0, 10),
       source: source as any,
       sourceTab: existingLeadObj?.sourceTab === "Quo" && sourceTab === "Other Ads" ? "Quo" : sourceTab,
@@ -13686,7 +13826,16 @@ async function syncFbThreadToSheetAndOptionallyJobber(
   ext.estimatedTotal = canonicalPkg.total;
   ext.depositRequired = canonicalPkg.depositRequired;
 
-  const addressStr = String(ext.address || "Edmonton, AB").trim();
+  const rawExtAddress = String(ext.address || "").trim();
+  const addressStr = rawExtAddress || "Edmonton, AB";
+  const hasVerifiedBedrooms = Boolean(ext.bedrooms && String(ext.bedrooms).trim());
+  const hasVerifiedBathrooms = Boolean(ext.bathrooms && String(ext.bathrooms).trim());
+  const hasVerifiedAddress =
+    Boolean(rawExtAddress) &&
+    rawExtAddress.toLowerCase() !== "edmonton, ab" &&
+    rawExtAddress.toLowerCase() !== "edmonton" &&
+    (/\d/.test(rawExtAddress) || /[A-Z]\d[A-Z]\s*\d[A-Z]\d/i.test(rawExtAddress));
+  const isDefaultQuoteInfo = !(hasVerifiedBedrooms && hasVerifiedBathrooms && hasVerifiedAddress);
 
   const leadItem: any = {
     id: leadId,
@@ -13699,9 +13848,18 @@ async function syncFbThreadToSheetAndOptionallyJobber(
     address: addressStr,
     city: addressStr.toLowerCase().includes("st. albert") ? "St. Albert" : "Edmonton",
     postalCode: addressStr.match(/[A-Z]\d[A-Z]\s*\d[A-Z]\d/i)?.[0]?.toUpperCase() || "",
-    serviceRequested: canonicalPkg.cleanItemName,
+    serviceRequested: isDefaultQuoteInfo
+      ? `${canonicalPkg.cleanItemName} (Default 3B/2B Base — Unverified)`
+      : canonicalPkg.cleanItemName,
     bedrooms: ext.bedrooms || "3 Bedrooms",
     bathrooms: ext.bathrooms || "2 Bathrooms",
+    isDefaultQuoteInfo,
+    hasVerifiedBedrooms,
+    hasVerifiedBathrooms,
+    hasVerifiedAddress,
+    defaultInfoLabel: isDefaultQuoteInfo
+      ? "🏷️ DEFAULT INFO — Default 3B/2B Placeholder (Not Real Client Info)"
+      : "✓ REAL CLIENT INFO",
     dateOfServiceRequested: ext.preferredDate || new Date().toISOString().slice(0, 10),
     dateReceived: threadCreatedIso,
     dateAdded: threadCreatedIso,
@@ -13711,7 +13869,7 @@ async function syncFbThreadToSheetAndOptionallyJobber(
     isJobberSynced: Boolean(thread.syncedQuoteNumber),
     quotedAmount: canonicalPkg.total,
     quoteNumber: thread.syncedQuoteNumber || undefined,
-    notes: `[${thread.pageName || "833 Tidyups"}] ${ext.specificNotes ? `Notes: ${ext.specificNotes} | ` : ""}Messenger Transcript: ${transcriptSummary}`,
+    notes: `${isDefaultQuoteInfo ? "[🏷️ DEFAULT INFO — Client did not provide full Bed/Bath/Address] " : ""}[${thread.pageName || "833 Tidyups"}] ${ext.specificNotes ? `Notes: ${ext.specificNotes} | ` : ""}Messenger Transcript: ${transcriptSummary}`,
   };
 
   if (

@@ -39,6 +39,7 @@ import {
   resolveCleanSheetTab,
   filterValidRecentLeads,
   isFakeOrSimulatedLead,
+  isLeadDefaultInfo,
 } from '../services/styledLeadsWorkbookBuilder';
 import { Technician, ServiceTicket } from '../types/dispatch';
 import { ScheduledJobItem } from './ScheduledJobsView';
@@ -927,6 +928,7 @@ export const MasterLeadsAndQuotesHubView: React.FC<MasterLeadsAndQuotesHubViewPr
     );
     const isExpanded = expandedTranscriptRowId === lead.id;
     const resolvedTab = resolveCleanSheetTab(lead);
+    const isDefaultInfo = isLeadDefaultInfo(lead);
 
     return (
       <React.Fragment key={`lead-row-${lead.id}`}>
@@ -940,12 +942,36 @@ export const MasterLeadsAndQuotesHubView: React.FC<MasterLeadsAndQuotesHubViewPr
             >
               <span>{theme.iconLabel}</span>
             </button>
+            <div className="mt-1">
+              {isDefaultInfo ? (
+                <span
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-950 border border-amber-400 text-[10px] font-black uppercase tracking-tight shadow-2xs"
+                  title="This lead has default placeholder info (3 Bed / 2 Bath or generic Edmonton address) — not real client-submitted details"
+                >
+                  🏷️ DEFAULT INFO
+                </span>
+              ) : (
+                <span
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 border border-emerald-300 text-[10px] font-black uppercase tracking-tight"
+                  title="Verified real client info submitted by customer"
+                >
+                  ✓ REAL CLIENT INFO
+                </span>
+              )}
+            </div>
           </td>
           <td className="px-3 py-2.5 text-xs font-mono font-bold text-slate-700 whitespace-nowrap">
             {String(lead.dateOfServiceRequested || lead.dateReceived || '').slice(0, 10) || '2026-10-27'}
           </td>
           <td className="px-3 py-2.5">
-            <div className="font-black text-slate-900 text-xs sm:text-sm">{lead.customerName}</div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="font-black text-slate-900 text-xs sm:text-sm">{lead.customerName}</span>
+              {isDefaultInfo && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-400 text-[9px] font-black uppercase tracking-wider">
+                  🏷️ DEFAULT INFO
+                </span>
+              )}
+            </div>
             {lead.email && <div className="text-[11px] text-slate-500 font-mono">{lead.email}</div>}
           </td>
           <td className="px-3 py-2.5 whitespace-nowrap">
@@ -983,40 +1009,32 @@ export const MasterLeadsAndQuotesHubView: React.FC<MasterLeadsAndQuotesHubViewPr
               </div>
               <div className="text-[10px] text-slate-500 font-semibold pl-4">
                 {lead.city || 'Edmonton'} {lead.postalCode ? `• ${lead.postalCode}` : ''}
+                {isDefaultInfo &&
+                  (!lead.address ||
+                    lead.address.trim().toLowerCase() === 'edmonton, ab' ||
+                    lead.address.trim().toLowerCase() === 'edmonton') && (
+                    <span className="block text-[9px] font-black text-amber-800">
+                      🏷️ Default Address
+                    </span>
+                  )}
               </div>
             </button>
           </td>
           <td className="px-3 py-2.5 max-w-[260px]">
-            {(() => {
-              const isDefaultInfo =
-                Boolean(lead.isDefaultQuoteInfo) ||
-                (!lead.quoteId &&
-                  !lead.quoteNumber &&
-                  (lead.leadVerdict === 'POTENTIAL_JOB' ||
-                    String(lead.serviceRequested || '').includes('Potential Cleaning Job') ||
-                    String(lead.serviceRequested || '').includes('Default') ||
-                    String(lead.serviceRequested || '').includes('Unverified') ||
-                    String(lead.customerName || '').startsWith('Potential Job Caller') ||
-                    String(lead.customerName || '').startsWith('Cleaning Caller')));
-              return (
-                <>
-                  {isDefaultInfo ? (
-                    <div className="mb-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-950 border border-amber-400 text-[10px] font-black uppercase tracking-tight">
-                      <span>⚠️ Default Placeholder — Not Real Caller Info</span>
-                    </div>
-                  ) : resolvedTab === 'Quo' ? (
-                    <div className="mb-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-900 border border-emerald-300 text-[10px] font-black uppercase tracking-tight">
-                      <span>✓ Verified Caller Info</span>
-                    </div>
-                  ) : null}
-                  <div className="text-xs font-extrabold text-slate-900">{lead.serviceRequested || 'Residential Cleaning'}</div>
-                  <div className="text-[11px] text-slate-600 font-medium">
-                    {lead.bedrooms || '3 Bedrooms'} • {lead.bathrooms || '2 Bathrooms'}
-                    {isDefaultInfo ? ' (Default 3B/2B Base)' : ''}
-                  </div>
-                </>
-              );
-            })()}
+            {isDefaultInfo ? (
+              <div className="mb-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-950 border border-amber-400 text-[10px] font-black uppercase tracking-tight">
+                <span>🏷️ Default Info — Not Real Client Info</span>
+              </div>
+            ) : (
+              <div className="mb-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-900 border border-emerald-300 text-[10px] font-black uppercase tracking-tight">
+                <span>✓ Real Client Info</span>
+              </div>
+            )}
+            <div className="text-xs font-extrabold text-slate-900">{lead.serviceRequested || 'Residential Cleaning'}</div>
+            <div className="text-[11px] text-slate-600 font-medium">
+              {lead.bedrooms || '3 Bedrooms'} • {lead.bathrooms || '2 Bathrooms'}
+              {isDefaultInfo ? ' (Default 3B/2B Base)' : ''}
+            </div>
             {lead.notes && (
               <div className="text-[10px] text-slate-500 line-clamp-1 mt-0.5" title={lead.notes}>
                 {lead.notes}
@@ -1033,35 +1051,23 @@ export const MasterLeadsAndQuotesHubView: React.FC<MasterLeadsAndQuotesHubViewPr
             )}
           </td>
           <td className="px-3 py-2.5 whitespace-nowrap">
-            {(() => {
-              const isDefaultInfo =
-                Boolean(lead.isDefaultQuoteInfo) ||
-                (!lead.quoteId &&
-                  !lead.quoteNumber &&
-                  (lead.leadVerdict === 'POTENTIAL_JOB' ||
-                    String(lead.serviceRequested || '').includes('Potential Cleaning Job') ||
-                    String(lead.serviceRequested || '').includes('Default') ||
-                    String(lead.serviceRequested || '').includes('Unverified') ||
-                    String(lead.customerName || '').startsWith('Potential Job Caller') ||
-                    String(lead.customerName || '').startsWith('Cleaning Caller')));
-              return (
-                <>
-                  <div className={`text-xs sm:text-sm font-black font-mono ${isDefaultInfo ? 'text-amber-800' : 'text-emerald-800'}`}>
-                    {isDefaultInfo ? 'Est. ' : ''}${Number(lead.quotedAmount || 221.07).toFixed(2)}
-                  </div>
-                  {isDefaultInfo && (
-                    <div className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 mt-0.5">
-                      ⚠️ Default 3B/2B Info
-                    </div>
-                  )}
-                  {lead.quoteNumber && (
-                    <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">
-                      {lead.quoteNumber}
-                    </span>
-                  )}
-                </>
-              );
-            })()}
+            <div className={`text-xs sm:text-sm font-black font-mono ${isDefaultInfo ? 'text-amber-800' : 'text-emerald-800'}`}>
+              {isDefaultInfo ? 'Est. ' : ''}${Number(lead.quotedAmount || 221.07).toFixed(2)}
+            </div>
+            {isDefaultInfo ? (
+              <div className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 mt-0.5">
+                🏷️ Default Info (3B/2B)
+              </div>
+            ) : (
+              <div className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 mt-0.5">
+                ✓ Real Client Quote
+              </div>
+            )}
+            {lead.quoteNumber && (
+              <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">
+                {lead.quoteNumber}
+              </span>
+            )}
           </td>
           <td className="px-3 py-2.5 whitespace-nowrap">
             <span
