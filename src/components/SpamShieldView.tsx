@@ -97,6 +97,13 @@ export const SpamShieldView: React.FC<SpamShieldViewProps> = ({
   const [expandedTranscriptIds, setExpandedTranscriptIds] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
+  const [shieldDiagnostics, setShieldDiagnostics] = useState<{
+    twilioWebhookCallsCount: number;
+    directQuoBypassCount: number;
+    twilioNeverHit: boolean;
+    bypassedBlockedAreaCodes: string[];
+    bypassedLines: string[];
+  } | null>(null);
 
   // Quick Block & Instant Search Input (Supports full phone number OR 3-digit area code)
   const [quickBlockInput, setQuickBlockInput] = useState(preFillNumber);
@@ -168,6 +175,7 @@ export const SpamShieldView: React.FC<SpamShieldViewProps> = ({
         if (data.recentInboundCalls) setRecentCalls(data.recentInboundCalls);
         if (data.quoScreenedCalls) setQuoScreenedCalls(data.quoScreenedCalls);
         if (data.allQuoCalls) setAllQuoCalls(data.allQuoCalls);
+        if (data.shieldDiagnostics) setShieldDiagnostics(data.shieldDiagnostics);
         setLastLiveSyncTime(new Date().toLocaleTimeString());
       }
     } catch (e) {
@@ -572,6 +580,7 @@ export const SpamShieldView: React.FC<SpamShieldViewProps> = ({
       transcriptText?: string;
       isBlocked: boolean;
       isWhitelisted: boolean;
+      bypassedTwilio?: boolean;
       blockReason: string;
       matchedPrefix?: string;
       leadVerdictLabel?: string;
@@ -580,7 +589,7 @@ export const SpamShieldView: React.FC<SpamShieldViewProps> = ({
 
     const seenKeys = new Set<string>();
 
-    // 1. Add all Twilio webhook inbound calls
+    // 1. Add all recentInboundCalls (distinguish true Twilio webhook calls from direct-to-Quo bypass calls)
     for (const rc of recentCalls || []) {
       const phone = rc.callerNumber || '';
       const clean10 = normalizePhone10(phone);
@@ -590,6 +599,12 @@ export const SpamShieldView: React.FC<SpamShieldViewProps> = ({
       const dedupeKey = `${clean10 || phone}-${bucket15s}`;
       seenKeys.add(dedupeKey);
       const shieldCheck = evaluateNumberAgainstShield(phone, rc);
+      const isDirectQuoBypass = Boolean(
+        rc.bypassedTwilioShield ||
+          rc.routeSource === 'QUO_DIRECT_BYPASS' ||
+          String(rc.id || '').startsWith('quo-hud-') ||
+          String(rc.callSid || '').startsWith('QUO_')
+      );
       rawItems.push({
         id: rc.id || rc.callSid || `tw-${ts}-${phone}`,
         timestamp: ts,
@@ -600,16 +615,25 @@ export const SpamShieldView: React.FC<SpamShieldViewProps> = ({
         callerName: rc.callerName || 'Inbound Caller',
         dialedLine: rc.originalDialedNumber
           ? `${rc.originalDialedNumber}${rc.campaignLabel ? ` (${rc.campaignLabel})` : ''}`
-          : rc.dialedNumber || 'Twilio Shield Line',
-        sourceBadge: 'Twilio Live Shield',
+          : rc.dialedNumber || (isDirectQuoBypass ? 'Quo Direct Line' : 'Twilio Shield Line'),
+        sourceBadge: isDirectQuoBypass ? 'Quo Direct (Bypassed Twilio)' : 'Twilio Live Shield',
+        bypassedTwilio: isDirectQuoBypass,
         duration: rc.duration,
         summary: rc.summary || rc.reason || '',
         transcriptText: rc.transcriptText || '',
         isBlocked: shieldCheck.isBlocked,
         isWhitelisted: shieldCheck.isWhitelisted,
-        blockReason: shieldCheck.reason,
+        blockReason:
+          shieldCheck.isBlocked && isDirectQuoBypass
+            ? `${shieldCheck.reason} — Bypassed Twilio (Dialed Quo directly)`
+            : shieldCheck.reason,
         matchedPrefix: shieldCheck.matchedPrefix,
-        leadVerdictLabel: shieldCheck.isBlocked ? '🚫 Blocked by Shield' : '✅ Allowed to Quo',
+        leadVerdictLabel:
+          shieldCheck.isBlocked && isDirectQuoBypass
+            ? '⚠️ Bypassed Shield (Rang Quo)'
+            : shieldCheck.isBlocked
+            ? '🚫 Blocked by Shield'
+            : '✅ Allowed to Quo',
       });
     }
 
@@ -634,16 +658,19 @@ export const SpamShieldView: React.FC<SpamShieldViewProps> = ({
         areaCode: shieldCheck.areaCode,
         callerName: qc.callerName && qc.callerName !== '0 Lead(s)' ? qc.callerName : 'Inbound Caller',
         dialedLine: qc.lineName || 'Quo / OpenPhone Line',
-        sourceBadge: qc.answeredByAi ? 'Quo • Sonia AI' : 'Quo / OpenPhone',
+        sourceBadge: qc.answeredByAi ? 'Quo • Sonia AI (Bypassed Twilio)' : 'Quo / OpenPhone Direct',
+        bypassedTwilio: true,
         duration: qc.duration,
         summary: qc.summary || qc.leadVerdictReason || '',
         transcriptText: qc.transcriptText || '',
         isBlocked: shieldCheck.isBlocked,
         isWhitelisted: shieldCheck.isWhitelisted,
-        blockReason: shieldCheck.reason,
+        blockReason: shieldCheck.isBlocked
+          ? `${shieldCheck.reason} — Bypassed Twilio (Dialed Quo directly)`
+          : shieldCheck.reason,
         matchedPrefix: shieldCheck.matchedPrefix,
         leadVerdictLabel: shieldCheck.isBlocked
-          ? '🚫 Blocked / Solicitor'
+          ? '⚠️ Bypassed Shield (Rang Quo)'
           : qc.leadVerdictLabel || (qc.hasCleaningIntent ? '✅ Good Cleaning Lead' : '📞 Answered / Allowed'),
         rawQuoCall: qc,
       });
@@ -818,10 +845,17 @@ export const SpamShieldView: React.FC<SpamShieldViewProps> = ({
               <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
                 Twilio Spam Shield &amp; Call Blocker Console
               </h1>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                Live TwiML Active
-              </span>
+              {shieldDiagnostics?.twilioNeverHit ? (
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                  Bypassed — 0 Calls Reaching Twilio
+                </span>
+              ) : (
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  Live TwiML Active ({shieldDiagnostics?.twilioWebhookCallsCount || 0} Screened)
+                </span>
+              )}
             </div>
             <p className="text-xs text-slate-400 mt-1 max-w-3xl leading-relaxed">
               Stop robocallers, international spoofers, and spammers with rotating numbers. Blocked callers receive an instant busy tone at <strong>$0 cost</strong> before your phone rings.
@@ -865,6 +899,58 @@ export const SpamShieldView: React.FC<SpamShieldViewProps> = ({
             <span className="font-extrabold text-sm">{statusNotice}</span>
           </div>
           <button onClick={() => setStatusNotice(null)} className="text-emerald-400 hover:text-white font-bold p-1">✕</button>
+        </div>
+      )}
+
+      {/* ⚠️ CRITICAL ROUTING DIAGNOSTIC: Show immediately when blocked area codes are bypassing Twilio and ringing Quo directly */}
+      {shieldDiagnostics && (shieldDiagnostics.twilioNeverHit || shieldDiagnostics.bypassedBlockedAreaCodes.length > 0) && (
+        <div className="p-4 sm:p-5 rounded-2xl bg-amber-950/60 border-2 border-amber-500/70 space-y-3 shadow-xl">
+          <div className="flex flex-col md:flex-row md:items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-400/50 text-amber-300 flex items-center justify-center shrink-0 mt-0.5">
+                <ShieldAlert className="w-5 h-5" />
+              </div>
+              <div className="space-y-1.5">
+                <h2 className="text-sm sm:text-base font-black text-amber-200">
+                  Why Blocked Area Codes {shieldDiagnostics.bypassedBlockedAreaCodes.length > 0 ? `(${shieldDiagnostics.bypassedBlockedAreaCodes.join(', ')})` : ''} Are Still Ringing Through
+                </h2>
+                <p className="text-xs text-amber-100/90 leading-relaxed">
+                  Your Spam Shield rules (<code className="px-1.5 py-0.5 rounded bg-black/40 text-amber-300 font-mono">{(config.blockedPrefixes || []).slice(0, 6).join(', ')}</code>) <strong>ARE saved and active</strong> on our Twilio webhook — <strong>but 0 incoming calls are currently passing through Twilio</strong>. Spammers are dialing your Quo line{shieldDiagnostics.bypassedLines.length > 0 ? ` (${shieldDiagnostics.bypassedLines.join(', ')})` : ' (+1 587-900-7223)'} directly, and Sona AI is answering before Twilio ever sees the call. Quo/OpenPhone does not support area-code blocking natively or by API.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-1 text-xs">
+                  <div className="p-3 rounded-xl bg-black/40 border border-amber-500/30 space-y-1">
+                    <div className="font-black text-emerald-300">Option 1 (Fastest — Forward Existing Quo GMB Line):</div>
+                    <p className="text-slate-200 leading-relaxed">
+                      In <strong>Quo → Settings → Phone Numbers → +1 (587) 900-7223</strong>, turn ON <strong>Unconditional Call Forwarding</strong> (before Sona AI / Ring) to Twilio <code className="text-amber-300 font-mono">+1 (587) 206-3733</code>. Then in <strong>Cost &amp; Line Routing</strong>, click <strong>&quot;4 Lines ➔ Quo Dispatch (587-570-8005)&quot;</strong> so Twilio forwards clean callers to a <em>different</em> Quo inbox (never back to 587-900-7223, which loops).
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-black/40 border border-amber-500/30 space-y-1">
+                    <div className="font-black text-sky-300">Option 2 (Best Long-Term — Put Twilio Number First):</div>
+                    <p className="text-slate-200 leading-relaxed">
+                      Publish your Twilio Shield number (<code className="text-amber-300 font-mono">+1 (587) 206-3733</code>) on Google Business Profile &amp; ads (or port <code className="font-mono">587-900-7223</code> into Twilio), and confirm Twilio&apos;s <em>&quot;A Call Comes In&quot;</em> webhook is set to <code className="text-emerald-300 font-mono">https://app.tidyupscleaning.com/api/twilio/voice</code>.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-row md:flex-col gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setActiveTab('COST_LINES')}
+                className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs cursor-pointer shadow transition-all"
+              >
+                Open Line Routing Setup →
+              </button>
+              <button
+                type="button"
+                onClick={handleCopyWebhook}
+                className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-emerald-300 border border-emerald-500/40 font-bold text-xs cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                {copiedWebhook ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedWebhook ? 'Webhook Copied!' : 'Copy Twilio Webhook'}</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1459,20 +1545,27 @@ export const SpamShieldView: React.FC<SpamShieldViewProps> = ({
                         {/* Left & Center: Call Status Badge, Phone, Area Code, Line, Summary */}
                         <div className="space-y-1.5 min-w-0 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
-                            {/* Blocked vs Not Blocked Primary Pill */}
+                            {/* Blocked vs Bypassed vs Not Blocked Primary Pill */}
                             <span
                               className={`px-3 py-1 rounded-lg text-xs font-black uppercase tracking-wider shadow-sm flex items-center gap-1.5 ${
-                                call.isBlocked
+                                call.isBlocked && call.bypassedTwilio
+                                  ? 'bg-amber-600 text-white border border-amber-300/60'
+                                  : call.isBlocked
                                   ? 'bg-rose-600 text-white'
                                   : call.isWhitelisted
                                   ? 'bg-emerald-400 text-slate-950'
                                   : 'bg-emerald-600 text-white'
                               }`}
                             >
-                              {call.isBlocked ? (
+                              {call.isBlocked && call.bypassedTwilio ? (
+                                <>
+                                  <ShieldAlert className="w-3.5 h-3.5" />
+                                  <span>⚠️ BYPASSED SHIELD (RANG QUO)</span>
+                                </>
+                              ) : call.isBlocked ? (
                                 <>
                                   <PhoneOff className="w-3.5 h-3.5" />
-                                  <span>🚫 BLOCKED</span>
+                                  <span>🚫 BLOCKED BY TWILIO</span>
                                 </>
                               ) : (
                                 <>

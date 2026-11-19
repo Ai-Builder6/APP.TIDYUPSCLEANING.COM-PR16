@@ -7,14 +7,14 @@
     "email": "cleaningserviceyeg@gmail.com",
     "phone": "(780) 718-5092",
     "assignedVan": "Mobile Unit",
-    "lat": 53.397591,
-    "lng": -113.595097,
+    "lat": 53.397428,
+    "lng": -113.595145,
     "accuracy": 100,
     "speedKmh": null,
     "heading": null,
     "deviceType": "Device GPS",
     "batteryLevel": null,
     "permissionState": "granted",
-    "timestamp": "2026-11-10T21:02:18.531Z"
+    "timestamp": "2026-11-19T19:49:07.466Z"
   }
 }

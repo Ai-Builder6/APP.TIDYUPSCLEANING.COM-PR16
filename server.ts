@@ -17708,11 +17708,13 @@ async function processQuoCallEvent(
     const hudRecord = {
       id: `quo-hud-${callId}`,
       callSid: callId,
+      routeSource: "QUO_DIRECT_BYPASS",
+      bypassedTwilioShield: true,
       timestamp: timestamp || new Date().toISOString(),
       callerNumber: cleanCallerPhone,
       areaCode: areaCode3,
       dialedNumber: dialedFromLine,
-      shieldNumber: "+1 (825) 533-4317",
+      shieldNumber: "",
       originalDialedNumber: dialedFromLine,
       campaignLabel: campaignClean || "Tidyups Cleaning GMB Direct",
       destinationNumber: dialedFromLine,
@@ -17733,7 +17735,7 @@ async function processQuoCallEvent(
       liveState: eventType === "call.ringing" ? "RINGING" : isAutoSolicitorOrSpam ? "BLOCKED" : "ANSWERED_IN_APP",
       dismissedInHud: false,
       reason: isAutoSolicitorOrSpam
-        ? callLogEntry.blockedReason || "Blocked by Spam Shield"
+        ? callLogEntry.blockedReason || "Matched Spam Shield Rule (Rang Quo Directly — Bypassed Twilio)"
         : `Dialed ${dialedFromLine} (${campaignClean})`,
     };
 
@@ -17788,9 +17790,13 @@ async function processQuoCallEvent(
         prev.originalDialedNumber && prev.originalDialedNumber !== dialedFromLine
           ? prev.campaignLabel
           : hudRecord.campaignLabel;
+      const prevWasTwilio = prev.routeSource === "TWILIO_VOICE_WEBHOOK" || String(prev.id || "").startsWith("call-");
       store.recentInboundCalls[exRecIdx] = {
         ...prev,
         ...hudRecord,
+        routeSource: prevWasTwilio ? "TWILIO_VOICE_WEBHOOK" : "QUO_DIRECT_BYPASS",
+        bypassedTwilioShield: !prevWasTwilio,
+        shieldNumber: prevWasTwilio ? prev.shieldNumber : "",
         originalDialedNumber: preserveOrigLine,
         campaignLabel: preserveCampaign,
         receivingLineLabel: lineName || prev.receivingLineLabel,
@@ -19216,7 +19222,7 @@ const DEFAULT_SPAM_SHIELD_CONFIG = {
   enabled: true,
   blockAllNonNorthAmerica: true, // Only allows +1 (Canada & US)
   blockedCountryCodes: ["+44", "+91", "+234", "+86", "+7", "+37", "+20", "+33"],
-  blockedPrefixes: ["1408*", "1301*", "1406*", "1800*", "1888*", "1877*", "1844*", "1855*", "1866*"],
+  blockedPrefixes: ["1859*", "1201*", "1414*", "1408*", "1301*", "1406*", "1800*", "1888*", "1877*", "1844*", "1855*", "1866*"],
   blockedNumbers: ["+18005550199", "+18885550123", "+14084617990", "+14084385789", "+14083207557", "+14083206464", "+14084615808", "+14084585452"],
   blockRobocallFloods: true,
   rejectionAction: "busy" as const,
@@ -19320,24 +19326,9 @@ function evaluateSpamCallRule(fromRaw: string, config: any): { isBlocked: boolea
     };
   }
 
-  // 3. Exact Blacklisted Numbers
-  const isBlacklisted = (config.blockedNumbers || []).some((bNum: string) => {
-    const bDigits = bNum.replace(/\D/g, "");
-    const normalizedBDigits = bDigits.length === 11 && bDigits.startsWith("1") ? bDigits.slice(1) : bDigits;
-    return (normalizedFromDigits && normalizedFromDigits === normalizedBDigits) || raw === bNum;
-  });
-
-  if (isBlacklisted) {
-    return {
-      isBlocked: true,
-      countryCode: detectedCountry,
-      reason: `Blacklisted phone number: ${raw}`,
-    };
-  }
-
-  // 4. Prefix / Wildcard Patterns & 3-Digit Area Codes (e.g. "1800*", "800*", "844*", "1647*")
+  // 3. Prefix / Wildcard Patterns & 3-Digit Area Codes (e.g. "1414*", "414*", "1201*", "1800*", "844*")
   const matchedPrefix = (config.blockedPrefixes || []).find((prefixPattern: string) => {
-    const cleanPattern = prefixPattern.replace(/\*/g, "").replace(/\D/g, "");
+    const cleanPattern = String(prefixPattern || "").replace(/\*/g, "").replace(/\D/g, "");
     if (!cleanPattern) return false;
     const normPattern = cleanPattern.length >= 4 && cleanPattern.startsWith("1") ? cleanPattern.slice(1) : cleanPattern;
     return (
@@ -19355,7 +19346,27 @@ function evaluateSpamCallRule(fromRaw: string, config: any): { isBlocked: boolea
     };
   }
 
+  // 4. Exact Blacklisted Numbers
+  const isBlacklisted = (config.blockedNumbers || []).some((bNum: string) => {
+    const bDigits = String(bNum || "").replace(/\D/g, "");
+    const normalizedBDigits = bDigits.length === 11 && bDigits.startsWith("1") ? bDigits.slice(1) : bDigits;
+    return (normalizedFromDigits && normalizedFromDigits === normalizedBDigits) || raw === bNum;
+  });
+
+  if (isBlacklisted) {
+    return {
+      isBlocked: true,
+      countryCode: detectedCountry,
+      reason: `Blacklisted phone number: ${raw}`,
+    };
+  }
+
   return { isBlocked: false };
+}
+
+function isProductionSpamShieldHost(req: express.Request): boolean {
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || req.hostname || "").toLowerCase();
+  return host.includes("app.tidyupscleaning.com") || host.includes("dispatchgeeni.com");
 }
 
 let lastFastSpamShieldSyncMs = 0;
@@ -19480,13 +19491,44 @@ app.get("/api/twilio/spam-shield", async (req, res) => {
 
   let store = loadStore(projectId);
 
-  if (store && (forceSync || nowMs - lastFastSpamShieldSyncMs > 4000)) {
+  if (store && !isProductionSpamShieldHost(req) && (forceSync || nowMs - lastFastSpamShieldSyncMs > 4000)) {
     lastFastSpamShieldSyncMs = nowMs;
     try {
       const remRes = await fetch(`https://app.tidyupscleaning.com/api/store?project=${projectId}`);
       if (remRes.ok) {
         const remData = await remRes.json();
         let storeUpdated = false;
+        // Also merge live spamShieldConfig rules (blockedPrefixes, blockedNumbers, blockedCountryCodes, unblockedNumbers)
+        if (remData.spamShieldConfig && typeof remData.spamShieldConfig === "object") {
+          if (!store.spamShieldConfig) {
+            store.spamShieldConfig = { ...DEFAULT_SPAM_SHIELD_CONFIG, ...remData.spamShieldConfig };
+            storeUpdated = true;
+          } else {
+            const mergeUnique = (existingArr: string[] = [], incomingArr: string[] = []) => {
+              const merged = Array.from(new Set([...incomingArr, ...existingArr]));
+              return merged;
+            };
+            const nextPrefixes = mergeUnique(store.spamShieldConfig.blockedPrefixes, remData.spamShieldConfig.blockedPrefixes);
+            const nextNumbers = mergeUnique(store.spamShieldConfig.blockedNumbers, remData.spamShieldConfig.blockedNumbers);
+            const nextCountries = mergeUnique(store.spamShieldConfig.blockedCountryCodes, remData.spamShieldConfig.blockedCountryCodes);
+            const nextUnblocked = mergeUnique(
+              (store.spamShieldConfig as any).unblockedNumbers,
+              (remData.spamShieldConfig as any).unblockedNumbers
+            );
+            if (
+              nextPrefixes.length !== (store.spamShieldConfig.blockedPrefixes || []).length ||
+              nextNumbers.length !== (store.spamShieldConfig.blockedNumbers || []).length ||
+              nextCountries.length !== (store.spamShieldConfig.blockedCountryCodes || []).length ||
+              nextUnblocked.length !== ((store.spamShieldConfig as any).unblockedNumbers || []).length
+            ) {
+              store.spamShieldConfig.blockedPrefixes = nextPrefixes;
+              store.spamShieldConfig.blockedNumbers = nextNumbers;
+              store.spamShieldConfig.blockedCountryCodes = nextCountries;
+              (store.spamShieldConfig as any).unblockedNumbers = nextUnblocked;
+              storeUpdated = true;
+            }
+          }
+        }
         if (Array.isArray(remData.quoCallLogs)) {
           if (!Array.isArray(store.quoCallLogs)) store.quoCallLogs = [];
           for (const rq of remData.quoCallLogs.slice(0, 60)) {
@@ -19560,8 +19602,15 @@ app.get("/api/twilio/spam-shield", async (req, res) => {
   const recentInboundCalls = (store?.recentInboundCalls || []).map((c: any) => {
     const evalRule = evaluateSpamCallRule(c.callerNumber || "", config);
     const isBlockedNow = evalRule.isBlocked || c.status === "BLOCKED";
+    const isDirectQuoBypass =
+      c.routeSource === "QUO_DIRECT_BYPASS" ||
+      String(c.id || "").startsWith("quo-hud-") ||
+      String(c.callSid || "").startsWith("QUO_");
     return {
       ...c,
+      routeSource: isDirectQuoBypass ? "QUO_DIRECT_BYPASS" : "TWILIO_VOICE_WEBHOOK",
+      bypassedTwilioShield: isDirectQuoBypass,
+      shieldNumber: isDirectQuoBypass ? "" : c.shieldNumber,
       status: isBlockedNow ? "BLOCKED" : "ALLOWED",
       reason: evalRule.isBlocked ? evalRule.reason : c.reason,
     };
@@ -19578,6 +19627,37 @@ app.get("/api/twilio/spam-shield", async (req, res) => {
   const quoScreenedCalls = allQuoCalls.filter(
     (c: any) => !c.hasCleaningIntent || c.status === "SOLICITOR_BLOCKED" || c.status === "SCREENED_CALL" || c.isBlocked
   );
+
+  // Honest Routing Diagnostics: detect when blocked area codes are ringing Quo directly and bypassing Twilio
+  const twilioWebhookCallsCount = recentInboundCalls.filter((c: any) => c.routeSource === "TWILIO_VOICE_WEBHOOK").length;
+  const directQuoBypassCount = recentInboundCalls.filter((c: any) => c.routeSource === "QUO_DIRECT_BYPASS").length;
+  const bypassedBlockedAreaCodesSet = new Set<string>();
+  const bypassedLinesSet = new Set<string>();
+  for (const c of allQuoCalls.slice(0, 60)) {
+    if (c.direction === "outbound") continue;
+    const digits = normalizePhoneDigits(c.callerPhone || "");
+    const area3 = digits.length === 10 ? digits.slice(0, 3) : "";
+    const evalRule = evaluateSpamCallRule(c.callerPhone || "", config);
+    if (evalRule.isBlocked && area3) {
+      const matchedPrefix = (config.blockedPrefixes || []).some((p: string) => {
+        const pd = String(p || "").replace(/\*/g, "").replace(/\D/g, "");
+        const pn = pd.length >= 4 && pd.startsWith("1") ? pd.slice(1) : pd;
+        return Boolean(pn && area3.startsWith(pn));
+      });
+      if (matchedPrefix) {
+        bypassedBlockedAreaCodesSet.add(area3);
+        if (c.lineName) bypassedLinesSet.add(String(c.lineName));
+      }
+    }
+  }
+  const shieldDiagnostics = {
+    twilioWebhookCallsCount,
+    directQuoBypassCount,
+    twilioNeverHit: twilioWebhookCallsCount === 0,
+    bypassedBlockedAreaCodes: Array.from(bypassedBlockedAreaCodesSet),
+    bypassedLines: Array.from(bypassedLinesSet),
+  };
+
   res.json({
     success: true,
     config,
@@ -19586,6 +19666,7 @@ app.get("/api/twilio/spam-shield", async (req, res) => {
     recentInboundCalls,
     quoScreenedCalls,
     allQuoCalls,
+    shieldDiagnostics,
   });
 });
 
@@ -19601,16 +19682,14 @@ app.post("/api/twilio/spam-shield", (req, res) => {
     ...incomingConfig,
   };
   store.lastSavedAt = new Date().toISOString();
-  saveStore(store, projectId);
+  saveStore({ ...store, explicitReplaceSpamShield: true }, projectId);
 
-  if (!req.headers["x-tidyups-sync"]) {
-    for (const host of ["https://app.tidyupscleaning.com", "https://dispatchgeeni.com"]) {
-      fetch(`${host}/api/twilio/spam-shield`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-tidyups-sync": "1" },
-        body: JSON.stringify({ config: store.spamShieldConfig }),
-      }).catch(() => {});
-    }
+  if (!req.headers["x-tidyups-sync"] && !isProductionSpamShieldHost(req)) {
+    fetch(`https://app.tidyupscleaning.com/api/twilio/spam-shield?project=${projectId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-tidyups-sync": "1" },
+      body: JSON.stringify({ config: store.spamShieldConfig }),
+    }).catch(() => {});
   }
 
   res.json({
@@ -19752,27 +19831,33 @@ app.post("/api/twilio/block-number", (req, res) => {
     });
   }
 
-  // Also record a block log item
-  store.blockedCallsHistory.unshift({
-    id: `blk-${Date.now().toString(36)}`,
-    timestamp: new Date().toISOString(),
-    callerNumber: appliedRuleLabel,
-    callerName: reason || (type === "areacode" ? "Blocked Area Code" : "Manual Blacklist"),
-    countryCode: appliedRuleLabel.startsWith("+") && !appliedRuleLabel.startsWith("+1") ? appliedRuleLabel.slice(0, 3) : "+1",
-    reason: reason || `Manually blocked from website (${type}: ${appliedRuleLabel})`,
-  });
+  // Also record a block log item (deduped within 5s window to prevent duplicate entries)
+  const nowIso = new Date().toISOString();
+  const hasRecentSameRule = store.blockedCallsHistory.some(
+    (h: any) =>
+      String(h?.callerNumber || "").trim() === appliedRuleLabel &&
+      Math.abs(Date.now() - new Date(h?.timestamp || 0).getTime()) < 5000
+  );
+  if (!hasRecentSameRule) {
+    store.blockedCallsHistory.unshift({
+      id: `blk-${Date.now().toString(36)}`,
+      timestamp: nowIso,
+      callerNumber: appliedRuleLabel,
+      callerName: reason || (type === "areacode" ? "Blocked Area Code" : "Manual Blacklist"),
+      countryCode: appliedRuleLabel.startsWith("+") && !appliedRuleLabel.startsWith("+1") ? appliedRuleLabel.slice(0, 3) : "+1",
+      reason: reason || `Manually blocked from website (${type}: ${appliedRuleLabel})`,
+    });
+  }
 
-  store.lastSavedAt = new Date().toISOString();
+  store.lastSavedAt = nowIso;
   saveStore(store, projectId);
 
-  if (!req.headers["x-tidyups-sync"]) {
-    for (const host of ["https://app.tidyupscleaning.com", "https://dispatchgeeni.com"]) {
-      fetch(`${host}/api/twilio/block-number`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-tidyups-sync": "1" },
-        body: JSON.stringify({ number, reason, type }),
-      }).catch(() => {});
-    }
+  if (!req.headers["x-tidyups-sync"] && !isProductionSpamShieldHost(req)) {
+    fetch(`https://app.tidyupscleaning.com/api/twilio/block-number?project=${projectId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-tidyups-sync": "1" },
+      body: JSON.stringify({ number, reason, type }),
+    }).catch(() => {});
   }
 
   res.json({
@@ -19800,8 +19885,18 @@ app.post("/api/twilio/unblock-number", (req, res) => {
 
   const targetDigits = normalizePhoneDigits(String(number || ""));
 
-  if (type === "prefix") {
-    store.spamShieldConfig.blockedPrefixes = store.spamShieldConfig.blockedPrefixes.filter((p: string) => p !== number);
+  if (type === "prefix" || type === "areacode") {
+    const rawUnblockDigits = String(number || "").replace(/\*/g, "").replace(/\D/g, "");
+    const normUnblockPrefix =
+      rawUnblockDigits.length >= 4 && rawUnblockDigits.startsWith("1")
+        ? rawUnblockDigits.slice(1)
+        : rawUnblockDigits;
+    store.spamShieldConfig.blockedPrefixes = (store.spamShieldConfig.blockedPrefixes || []).filter((p: string) => {
+      if (p === number) return false;
+      const pDigits = String(p || "").replace(/\*/g, "").replace(/\D/g, "");
+      const pNorm = pDigits.length >= 4 && pDigits.startsWith("1") ? pDigits.slice(1) : pDigits;
+      return !(normUnblockPrefix && pNorm === normUnblockPrefix);
+    });
   } else if (type === "country") {
     store.spamShieldConfig.blockedCountryCodes = store.spamShieldConfig.blockedCountryCodes.filter((c: string) => c !== number);
   } else {
@@ -19844,14 +19939,12 @@ app.post("/api/twilio/unblock-number", (req, res) => {
   store.lastSavedAt = new Date().toISOString();
   saveStore({ ...store, explicitReplaceSpamShield: true }, projectId);
 
-  if (!req.headers["x-tidyups-sync"]) {
-    for (const host of ["https://app.tidyupscleaning.com", "https://dispatchgeeni.com"]) {
-      fetch(`${host}/api/twilio/unblock-number`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-tidyups-sync": "1" },
-        body: JSON.stringify({ number, type }),
-      }).catch(() => {});
-    }
+  if (!req.headers["x-tidyups-sync"] && !isProductionSpamShieldHost(req)) {
+    fetch(`https://app.tidyupscleaning.com/api/twilio/unblock-number?project=${projectId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-tidyups-sync": "1" },
+      body: JSON.stringify({ number, type }),
+    }).catch(() => {});
   }
 
   res.json({
@@ -20155,6 +20248,8 @@ const handleTwilioVoiceWebhook = (req: express.Request, res: express.Response) =
   const callRecord = {
     id: `call-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
     callSid,
+    routeSource: "TWILIO_VOICE_WEBHOOK",
+    bypassedTwilioShield: false,
     timestamp: new Date().toISOString(),
     callerNumber: fromNumber,
     areaCode: extractedAreaCode,
@@ -20294,11 +20389,13 @@ function quoLogToScreenerRecord(q: any, store: any): any {
   return {
     id: q.id || q.callId,
     callSid: q.callId || q.id,
+    routeSource: "QUO_DIRECT_BYPASS",
+    bypassedTwilioShield: true,
     timestamp: q.timestamp || q.createdAt || new Date().toISOString(),
     callerNumber: q.callerPhone || "Unknown",
     areaCode: areaCode3,
     dialedNumber: dialedFromLine,
-    shieldNumber: "+1 (825) 533-4317",
+    shieldNumber: "",
     originalDialedNumber: dialedFromLine,
     campaignLabel: campaignClean || "Tidyups Cleaning GMB Direct",
     destinationNumber: dialedFromLine,
