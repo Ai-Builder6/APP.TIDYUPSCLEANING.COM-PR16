@@ -32,6 +32,7 @@ import {
   Volume2,
   Calculator,
   RotateCcw,
+  Phone,
 } from 'lucide-react';
 import { AddressAutocompleteInput } from './AddressAutocompleteInput';
 import { ServiceTicket } from '../types/dispatch';
@@ -1458,8 +1459,24 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
             </div>
           </div>
 
-          {/* Customer-Only Actions (Zero Phone Numbers) */}
+          {/* Customer Contact Actions & Phone Numbers */}
           <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
+            <a
+              href="tel:+18338439877"
+              className="px-3 py-2 rounded-xl bg-emerald-950/90 hover:bg-emerald-900 border border-emerald-400/60 text-emerald-200 font-mono font-black text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+            >
+              <Phone className="w-3.5 h-3.5 text-emerald-400" />
+              <span>833-843-9877</span>
+            </a>
+
+            <a
+              href="tel:+15877422500"
+              className="px-3 py-2 rounded-xl bg-sky-950/90 hover:bg-sky-900 border border-sky-400/60 text-sky-200 font-mono font-black text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+            >
+              <Phone className="w-3.5 h-3.5 text-sky-400" />
+              <span>587-742-2500</span>
+            </a>
+
             <a
               href="https://tidyupscleaning.com"
               target="_blank"
@@ -2693,6 +2710,20 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
             </div>
 
             <div className="flex flex-wrap items-center justify-center gap-4 font-bold">
+              <a
+                href="tel:+18338439877"
+                className="text-emerald-400 hover:text-emerald-300 font-mono flex items-center gap-1"
+              >
+                <Phone className="w-3.5 h-3.5" />
+                <span>833-843-9877</span>
+              </a>
+              <a
+                href="tel:+15877422500"
+                className="text-sky-400 hover:text-sky-300 font-mono flex items-center gap-1"
+              >
+                <Phone className="w-3.5 h-3.5" />
+                <span>587-742-2500</span>
+              </a>
               <a
                 href="https://tidyupscleaning.com"
                 target="_blank"
