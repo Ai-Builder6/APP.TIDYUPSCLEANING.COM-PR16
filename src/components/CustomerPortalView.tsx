@@ -289,7 +289,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
     return 'Website (app.tidyupscleaning.com/booking)';
   }, []);
 
-  const [activeLegalModal, setActiveLegalModal] = useState<'PRIVACY' | 'TERMS' | 'SUPPORT' | null>(() => {
+  const [activeLegalModal, setActiveLegalModal] = useState<'PRIVACY' | 'CONTACT' | 'TERMS' | 'SUPPORT' | null>(() => {
     if (typeof window === 'undefined') return null;
     const path = window.location.pathname.toLowerCase();
     const search = window.location.search.toLowerCase();
@@ -301,6 +301,14 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
       hash.includes('privacy')
     ) {
       return 'PRIVACY';
+    }
+    if (
+      path.includes('contact') ||
+      search.includes('legal=contact') ||
+      search.includes('page=contact') ||
+      hash.includes('contact')
+    ) {
+      return 'CONTACT';
     }
     if (
       path.includes('terms') ||
@@ -318,7 +326,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
     return null;
   });
 
-  const handleOpenLegalModal = (tab: 'PRIVACY' | 'TERMS' | 'SUPPORT' | null) => {
+  const handleOpenLegalModal = (tab: 'PRIVACY' | 'CONTACT' | 'TERMS' | 'SUPPORT' | null) => {
     setActiveLegalModal(tab);
     if (typeof window !== 'undefined') {
       try {
@@ -328,6 +336,8 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
         const basePrefix = isBookSubpath ? '/book' : '';
         if (tab === 'PRIVACY') {
           window.history.replaceState({}, '', `${basePrefix}/privacy-policy${currentUrl.search}`);
+        } else if (tab === 'CONTACT') {
+          window.history.replaceState({}, '', `${basePrefix}/contact${currentUrl.search}`);
         } else if (tab === 'TERMS') {
           window.history.replaceState({}, '', `${basePrefix}/terms${currentUrl.search}`);
         } else if (tab === 'SUPPORT') {
@@ -1496,23 +1506,53 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
               <span>booking@tidyupscleaning.com</span>
             </a>
 
-            <button
-              type="button"
-              onClick={() => handleOpenLegalModal('PRIVACY')}
+            <a
+              href="/privacy"
+              onClick={(e) => {
+                e.preventDefault();
+                handleOpenLegalModal('PRIVACY');
+              }}
               className="px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-black text-xs flex items-center gap-1 transition-all cursor-pointer"
             >
               <Lock className="w-3.5 h-3.5 text-sky-400" />
               <span>Privacy</span>
-            </button>
+            </a>
 
-            <button
-              type="button"
-              onClick={() => handleOpenLegalModal('TERMS')}
+            <a
+              href="/contact"
+              onClick={(e) => {
+                e.preventDefault();
+                handleOpenLegalModal('CONTACT');
+              }}
+              className="px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-black text-xs flex items-center gap-1 transition-all cursor-pointer"
+            >
+              <Phone className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Contact</span>
+            </a>
+
+            <a
+              href="/support"
+              onClick={(e) => {
+                e.preventDefault();
+                handleOpenLegalModal('SUPPORT');
+              }}
+              className="px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-black text-xs flex items-center gap-1 transition-all cursor-pointer"
+            >
+              <HelpCircle className="w-3.5 h-3.5 text-amber-400" />
+              <span>Support</span>
+            </a>
+
+            <a
+              href="/terms"
+              onClick={(e) => {
+                e.preventDefault();
+                handleOpenLegalModal('TERMS');
+              }}
               className="px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-black text-xs flex items-center gap-1 transition-all cursor-pointer"
             >
               <FileText className="w-3.5 h-3.5 text-purple-400" />
-              <span>T&amp;C</span>
-            </button>
+              <span>Terms</span>
+            </a>
 
             <button
               type="button"
@@ -2744,30 +2784,50 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
               © {new Date().getFullYear()} TidyUps Cleaning Service Inc. All rights reserved. • 8306 Chappelle Way SW, Edmonton, AB T6W 4L3
             </div>
             <div className="flex flex-wrap items-center gap-4 font-bold">
-              <button
-                type="button"
-                onClick={() => handleOpenLegalModal('PRIVACY')}
+              <a
+                href="/privacy"
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleOpenLegalModal('PRIVACY');
+                }}
                 className="text-pink-400 hover:text-white underline cursor-pointer flex items-center gap-1"
               >
                 <Lock className="w-3 h-3" />
                 <span>Privacy Policy</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleOpenLegalModal('TERMS')}
-                className="text-red-400 hover:text-white underline cursor-pointer flex items-center gap-1"
+              </a>
+              <a
+                href="/contact"
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleOpenLegalModal('CONTACT');
+                }}
+                className="text-emerald-400 hover:text-white underline cursor-pointer flex items-center gap-1"
               >
-                <FileText className="w-3 h-3" />
-                <span>Terms &amp; Conditions</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleOpenLegalModal('SUPPORT')}
+                <Phone className="w-3 h-3" />
+                <span>Contact</span>
+              </a>
+              <a
+                href="/support"
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleOpenLegalModal('SUPPORT');
+                }}
                 className="text-zinc-300 hover:text-white underline cursor-pointer flex items-center gap-1"
               >
                 <HelpCircle className="w-3 h-3" />
-                <span>FAQ &amp; Support</span>
-              </button>
+                <span>Support</span>
+              </a>
+              <a
+                href="/terms"
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleOpenLegalModal('TERMS');
+                }}
+                className="text-red-400 hover:text-white underline cursor-pointer flex items-center gap-1"
+              >
+                <FileText className="w-3 h-3" />
+                <span>Terms of Service</span>
+              </a>
               {onOpenStaffLogin && !isCustomerLockPreview && (
                 <button
                   type="button"
@@ -2818,6 +2878,19 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
 
                 <button
                   type="button"
+                  onClick={() => handleOpenLegalModal('CONTACT')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer transition-all ${
+                    activeLegalModal === 'CONTACT'
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
+                  }`}
+                >
+                  <Phone className="w-3.5 h-3.5" />
+                  <span>Contact</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => handleOpenLegalModal('TERMS')}
                   className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer transition-all ${
                     activeLegalModal === 'TERMS'
@@ -2826,7 +2899,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                   }`}
                 >
                   <FileText className="w-3.5 h-3.5" />
-                  <span>Terms &amp; Conditions</span>
+                  <span>Terms of Service</span>
                 </button>
 
                 <button
@@ -2839,7 +2912,7 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                   }`}
                 >
                   <HelpCircle className="w-3.5 h-3.5" />
-                  <span>FAQ &amp; Support</span>
+                  <span>Support</span>
                 </button>
 
                 <button
@@ -2862,20 +2935,39 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                     We collect your First Name, Last Name, mobile phone number, email address, and property details solely to prepare your cleaning quote, schedule your appointment in Jobber, and deliver your residential cleaning service. We never sell or share your personal data with third parties.
                   </p>
                   <p>
-                    Questions? Email <a href="mailto:booking@tidyupscleaning.com" className="text-pink-400 underline font-bold">booking@tidyupscleaning.com</a>.
+                    Questions? Call <a href="tel:+18338439877" className="text-emerald-400 underline font-mono font-bold">833-843-9877</a> or <a href="tel:+15877422500" className="text-sky-400 underline font-mono font-bold">587-742-2500</a>, or email <a href="mailto:booking@tidyupscleaning.com" className="text-pink-400 underline font-bold">booking@tidyupscleaning.com</a>.
                   </p>
+                </div>
+              )}
+
+              {activeLegalModal === 'CONTACT' && (
+                <div className="space-y-4">
+                  <h3 className="text-xl font-black text-white">
+                    Contact Us — TidyUps Cleaning Service Inc.
+                  </h3>
+                  <p>
+                    Reach our Edmonton cleaning &amp; booking team 7 days a week (8:00 AM – 8:00 PM MST):
+                  </p>
+                  <ul className="list-disc list-inside space-y-2">
+                    <li><strong>Toll-Free:</strong> <a href="tel:+18338439877" className="text-emerald-400 underline font-mono font-bold">833-843-9877</a></li>
+                    <li><strong>Edmonton Local:</strong> <a href="tel:+15877422500" className="text-sky-400 underline font-mono font-bold">587-742-2500</a></li>
+                    <li><strong>Email:</strong> <a href="mailto:booking@tidyupscleaning.com" className="text-pink-400 underline font-bold">booking@tidyupscleaning.com</a></li>
+                    <li><strong>Office Address:</strong> 8306 Chappelle Way SW, Edmonton, AB T6W 4L3</li>
+                    <li><strong>Service Area:</strong> Edmonton, St. Albert, Sherwood Park, Spruce Grove, Leduc &amp; Beaumont</li>
+                  </ul>
                 </div>
               )}
 
               {activeLegalModal === 'TERMS' && (
                 <div className="space-y-4">
                   <h3 className="text-xl font-black text-white">
-                    Terms &amp; Conditions — TidyUps Cleaning Service Inc.
+                    Terms of Service — TidyUps Cleaning Service Inc.
                   </h3>
                   <ul className="list-disc list-inside space-y-2">
                     <li><strong>Basic Cleaning:</strong> Scheduled with 1 professional cleaner ($52.50/hr).</li>
                     <li><strong>Move-Out Cleaning:</strong> Minimum 3 hours with 2 cleaners ($105.00/hr = $315.00 min), or starts at 6 hours minimum with 1 cleaner ($52.50/hr = $315.00 min).</li>
                     <li><strong>Deep Cleaning:</strong> Minimum 2 cleaners for 2 hours ($105.00/hr = $210.00 min).</li>
+                    <li><strong>Cancellations &amp; Rescheduling:</strong> Please provide at least 24 hours notice to avoid a late-cancellation fee.</li>
                     <li><strong>24-Hour Clean Guarantee:</strong> Report any missed checklist item within 24 hours and our team returns to re-clean it free of charge.</li>
                   </ul>
                 </div>
@@ -2887,7 +2979,10 @@ export const CustomerPortalView: React.FC<CustomerPortalViewProps> = ({
                     Customer Support &amp; FAQ
                   </h3>
                   <p>
-                    All supplies, HEPA vacuums, and eco-safe sanitizers are included with every clean. Email our Edmonton booking desk anytime at{' '}
+                    All supplies, HEPA vacuums, and eco-safe sanitizers are included with every clean. Need help with an existing booking, quote, or reschedule? Call{' '}
+                    <a href="tel:+18338439877" className="text-emerald-400 underline font-mono font-bold">833-843-9877</a>{' '}
+                    or{' '}
+                    <a href="tel:+15877422500" className="text-sky-400 underline font-mono font-bold">587-742-2500</a>, or email{' '}
                     <a href="mailto:booking@tidyupscleaning.com" className="text-pink-400 underline font-bold">
                       booking@tidyupscleaning.com
                     </a>

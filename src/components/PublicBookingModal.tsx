@@ -23,6 +23,9 @@ import {
   Volume2,
   RotateCcw,
   Phone,
+  FileText,
+  HelpCircle,
+  MapPin,
 } from 'lucide-react';
 import { ServiceTicket } from '../types/dispatch';
 import { AddressAutocompleteInput } from './AddressAutocompleteInput';
@@ -150,6 +153,17 @@ export const PublicBookingModal: React.FC<PublicBookingModalProps> = ({
   const [bedrooms, setBedrooms] = useState('');
   const [bathrooms, setBathrooms] = useState('');
   const [cleanerCount, setCleanerCount] = useState<1 | 2>(2);
+  const [activeLegalModal, setActiveLegalModal] = useState<'PRIVACY' | 'CONTACT' | 'SUPPORT' | 'TERMS' | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const p = window.location.pathname.toLowerCase();
+    const s = window.location.search.toLowerCase();
+    const h = window.location.hash.toLowerCase();
+    if (p.includes('privacy') || s.includes('legal=privacy') || h.includes('privacy')) return 'PRIVACY';
+    if (p.includes('contact') || s.includes('legal=contact') || h.includes('contact')) return 'CONTACT';
+    if (p.includes('support') || s.includes('legal=support') || h.includes('support')) return 'SUPPORT';
+    if (p.includes('terms') || p.includes('t&c') || p.includes('tos') || s.includes('legal=terms') || h.includes('terms')) return 'TERMS';
+    return null;
+  });
   // Auto-detect Facebook Ads & Google Ads parameters (?source=..., ?utm_source=..., ?fbclid=..., ?gclid=...) on app.tidyupscleaning.com/booking
   const detectedAdRouting = useMemo(() => {
     if (typeof window === 'undefined') {
@@ -990,28 +1004,84 @@ export const PublicBookingModal: React.FC<PublicBookingModalProps> = ({
         </div>
       </div>
 
-      {/* Direct Call & Google Ads Verified Phone Numbers Strip */}
-      <div className="px-5 sm:px-6 py-2.5 bg-slate-900/95 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2.5 text-xs">
-        <div className="flex items-center gap-2 text-slate-300 font-bold">
-          <Phone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-          <span>Prefer to call or book by phone? Reach TidyUps Cleaning directly:</span>
+      {/* Direct Call & Google Ads Verified Phone Numbers + Legal/Support Links Strip */}
+      <div className="px-5 sm:px-6 py-2.5 bg-slate-900/95 border-b border-slate-800 flex flex-col gap-2 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2 text-slate-300 font-bold">
+            <Phone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span>Prefer to call or book by phone? Reach TidyUps Cleaning directly:</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <a
+              href="tel:+18338439877"
+              className="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-400/50 text-emerald-200 hover:text-white font-mono font-black inline-flex items-center gap-1.5 transition-all"
+            >
+              <Phone className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Toll-Free: 833-843-9877</span>
+            </a>
+            <a
+              href="tel:+15877422500"
+              className="px-3 py-1.5 rounded-lg bg-sky-600/20 hover:bg-sky-600/35 border border-sky-400/50 text-sky-200 hover:text-white font-mono font-black inline-flex items-center gap-1.5 transition-all"
+            >
+              <Phone className="w-3.5 h-3.5 text-sky-400" />
+              <span>Edmonton: 587-742-2500</span>
+            </a>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <a
-            href="tel:+18338439877"
-            className="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-400/50 text-emerald-200 hover:text-white font-mono font-black inline-flex items-center gap-1.5 transition-all"
-          >
-            <Phone className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Toll-Free: 833-843-9877</span>
-          </a>
-          <a
-            href="tel:+15877422500"
-            className="px-3 py-1.5 rounded-lg bg-sky-600/20 hover:bg-sky-600/35 border border-sky-400/50 text-sky-200 hover:text-white font-mono font-black inline-flex items-center gap-1.5 transition-all"
-          >
-            <Phone className="w-3.5 h-3.5 text-sky-400" />
-            <span>Edmonton: 587-742-2500</span>
-          </a>
-        </div>
+        <nav
+          aria-label="Booking page legal and support navigation"
+          className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[11px]"
+        >
+          <span className="text-slate-400 font-semibold">
+            Edmonton &amp; Area • Insured, Bonded &amp; 24-Hour Clean Guarantee
+          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <a
+              href="/privacy"
+              onClick={(e) => {
+                e.preventDefault();
+                setActiveLegalModal('PRIVACY');
+              }}
+              className="px-2.5 py-1 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-700 text-slate-200 hover:text-sky-300 font-bold inline-flex items-center gap-1 transition-colors"
+            >
+              <Lock className="w-3 h-3 text-sky-400" />
+              <span>Privacy Policy</span>
+            </a>
+            <a
+              href="/contact"
+              onClick={(e) => {
+                e.preventDefault();
+                setActiveLegalModal('CONTACT');
+              }}
+              className="px-2.5 py-1 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-700 text-slate-200 hover:text-emerald-300 font-bold inline-flex items-center gap-1 transition-colors"
+            >
+              <Phone className="w-3 h-3 text-emerald-400" />
+              <span>Contact</span>
+            </a>
+            <a
+              href="/support"
+              onClick={(e) => {
+                e.preventDefault();
+                setActiveLegalModal('SUPPORT');
+              }}
+              className="px-2.5 py-1 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-700 text-slate-200 hover:text-amber-300 font-bold inline-flex items-center gap-1 transition-colors"
+            >
+              <HelpCircle className="w-3 h-3 text-amber-400" />
+              <span>Support</span>
+            </a>
+            <a
+              href="/terms"
+              onClick={(e) => {
+                e.preventDefault();
+                setActiveLegalModal('TERMS');
+              }}
+              className="px-2.5 py-1 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-700 text-slate-200 hover:text-purple-300 font-bold inline-flex items-center gap-1 transition-colors"
+            >
+              <FileText className="w-3 h-3 text-purple-400" />
+              <span>Terms of Service</span>
+            </a>
+          </div>
+        </nav>
       </div>
 
       {/* Form Body */}
@@ -1987,44 +2057,90 @@ export const PublicBookingModal: React.FC<PublicBookingModalProps> = ({
 
         {formCardContent}
 
-        {/* Public Footer with Verified Contact Numbers */}
-        <div className="max-w-4xl mx-auto mt-6 text-center text-xs text-slate-400 flex flex-wrap items-center justify-center gap-3 sm:gap-4">
-          <span>© {new Date().getFullYear()} TidyUps Cleaning Service Inc. • Edmonton &amp; Area</span>
-          <span>•</span>
-          <a
-            href="tel:+18338439877"
-            className="text-emerald-400 hover:underline font-mono font-black inline-flex items-center gap-1"
-          >
-            <Phone className="w-3 h-3" />
-            <span>833-843-9877</span>
-          </a>
-          <span>•</span>
-          <a
-            href="tel:+15877422500"
-            className="text-sky-400 hover:underline font-mono font-black inline-flex items-center gap-1"
-          >
-            <Phone className="w-3 h-3" />
-            <span>587-742-2500</span>
-          </a>
-          <span>•</span>
-          <a
-            href="mailto:booking@tidyupscleaning.com"
-            className="text-sky-400 hover:underline font-bold"
-          >
-            booking@tidyupscleaning.com
-          </a>
-          <span>•</span>
-          <a
-            href="https://tidyupscleaning.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-emerald-400 hover:underline font-bold"
-          >
-            tidyupscleaning.com
-          </a>
-          {onOpenStaffLogin && !isOwnerViewing && (
-            <>
-              <span>•</span>
+        {/* Public Footer with Verified Contact Numbers & Legal Links */}
+        <footer className="max-w-4xl mx-auto mt-6 pt-5 border-t border-slate-800/80 text-center text-xs text-slate-400 space-y-3">
+          <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4">
+            <span>© {new Date().getFullYear()} TidyUps Cleaning Service Inc. • Edmonton &amp; Area</span>
+            <span>•</span>
+            <a
+              href="tel:+18338439877"
+              className="text-emerald-400 hover:underline font-mono font-black inline-flex items-center gap-1"
+            >
+              <Phone className="w-3 h-3" />
+              <span>833-843-9877</span>
+            </a>
+            <span>•</span>
+            <a
+              href="tel:+15877422500"
+              className="text-sky-400 hover:underline font-mono font-black inline-flex items-center gap-1"
+            >
+              <Phone className="w-3 h-3" />
+              <span>587-742-2500</span>
+            </a>
+            <span>•</span>
+            <a
+              href="mailto:booking@tidyupscleaning.com"
+              className="text-sky-400 hover:underline font-bold"
+            >
+              booking@tidyupscleaning.com
+            </a>
+            <span>•</span>
+            <a
+              href="https://tidyupscleaning.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-emerald-400 hover:underline font-bold"
+            >
+              tidyupscleaning.com
+            </a>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-center gap-4 text-[11px] font-bold">
+            <a
+              href="/privacy"
+              onClick={(e) => {
+                e.preventDefault();
+                setActiveLegalModal('PRIVACY');
+              }}
+              className="text-sky-300 hover:text-white underline inline-flex items-center gap-1"
+            >
+              <Lock className="w-3 h-3" />
+              <span>Privacy Policy</span>
+            </a>
+            <a
+              href="/contact"
+              onClick={(e) => {
+                e.preventDefault();
+                setActiveLegalModal('CONTACT');
+              }}
+              className="text-emerald-300 hover:text-white underline inline-flex items-center gap-1"
+            >
+              <Phone className="w-3 h-3" />
+              <span>Contact</span>
+            </a>
+            <a
+              href="/support"
+              onClick={(e) => {
+                e.preventDefault();
+                setActiveLegalModal('SUPPORT');
+              }}
+              className="text-amber-300 hover:text-white underline inline-flex items-center gap-1"
+            >
+              <HelpCircle className="w-3 h-3" />
+              <span>Support</span>
+            </a>
+            <a
+              href="/terms"
+              onClick={(e) => {
+                e.preventDefault();
+                setActiveLegalModal('TERMS');
+              }}
+              className="text-purple-300 hover:text-white underline inline-flex items-center gap-1"
+            >
+              <FileText className="w-3 h-3" />
+              <span>Terms of Service</span>
+            </a>
+            {onOpenStaffLogin && !isOwnerViewing && (
               <button
                 type="button"
                 onClick={onOpenStaffLogin}
@@ -2033,9 +2149,241 @@ export const PublicBookingModal: React.FC<PublicBookingModalProps> = ({
                 <Lock className="w-3 h-3" />
                 <span>Owner / Staff Login</span>
               </button>
-            </>
-          )}
-        </div>
+            )}
+          </div>
+          <p className="text-[11px] text-slate-500">
+            8306 Chappelle Way SW, Edmonton, AB T6W 4L3 • Serving Edmonton, St. Albert, Sherwood Park, Spruce Grove, Leduc &amp; Beaumont
+          </p>
+        </footer>
+
+        {/* Built-In Privacy Policy, Contact, Support & Terms of Service Modal */}
+        {activeLegalModal && (
+          <div
+            className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            onClick={() => setActiveLegalModal(null)}
+          >
+            <div
+              className="bg-slate-950 rounded-3xl border-2 border-sky-500/70 shadow-2xl max-w-3xl w-full max-h-[88vh] flex flex-col overflow-hidden my-auto text-white"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="bg-gradient-to-r from-slate-950 via-indigo-950/90 to-slate-900 px-5 py-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 shrink-0">
+                <div className="flex items-center gap-3">
+                  <TidyUpsBunnyLogo size="sm" />
+                  <div>
+                    <h2 className="text-base font-black text-white">TidyUps Cleaning Service Inc.</h2>
+                    <p className="text-[11px] text-sky-300 font-mono">app.tidyupscleaning.com/booking</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setActiveLegalModal('PRIVACY')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer transition-all ${
+                      activeLegalModal === 'PRIVACY'
+                        ? 'bg-sky-600 text-white'
+                        : 'bg-slate-900 text-slate-300 hover:bg-slate-800'
+                    }`}
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Privacy</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveLegalModal('CONTACT')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer transition-all ${
+                      activeLegalModal === 'CONTACT'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-900 text-slate-300 hover:bg-slate-800'
+                    }`}
+                  >
+                    <Phone className="w-3.5 h-3.5" />
+                    <span>Contact</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveLegalModal('SUPPORT')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer transition-all ${
+                      activeLegalModal === 'SUPPORT'
+                        ? 'bg-amber-600 text-white'
+                        : 'bg-slate-900 text-slate-300 hover:bg-slate-800'
+                    }`}
+                  >
+                    <HelpCircle className="w-3.5 h-3.5" />
+                    <span>Support</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveLegalModal('TERMS')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 cursor-pointer transition-all ${
+                      activeLegalModal === 'TERMS'
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-slate-900 text-slate-300 hover:bg-slate-800'
+                    }`}
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>Terms of Service</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveLegalModal(null)}
+                    className="ml-1 p-2 rounded-xl bg-slate-900 hover:bg-rose-600 text-white cursor-pointer transition-all"
+                    aria-label="Close legal modal"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-5 sm:p-7 overflow-y-auto space-y-4 text-xs sm:text-sm text-slate-300 leading-relaxed flex-1">
+                {activeLegalModal === 'PRIVACY' && (
+                  <div className="space-y-4">
+                    <h3 className="text-lg sm:text-xl font-black text-white">
+                      Privacy Policy — TidyUps Cleaning Service Inc.
+                    </h3>
+                    <p>
+                      TidyUps Cleaning Service Inc. respects your privacy and complies with Alberta PIPA and Canadian PIPEDA privacy standards. We collect your name, phone number, email address, service address, and home cleaning preferences solely to provide accurate cleaning quotes, confirm bookings, dispatch technicians, and deliver customer support.
+                    </p>
+                    <ul className="list-disc list-inside space-y-1.5 text-slate-300">
+                      <li><strong>No Sale of Personal Data:</strong> We never sell, rent, or trade your personal contact information to third parties.</li>
+                      <li><strong>Booking &amp; Communications:</strong> By submitting a booking request, you consent to receive appointment confirmations, arrival updates, and quotes via phone, SMS, or email. Reply STOP at any time to opt out of SMS.</li>
+                      <li><strong>Advertising &amp; Analytics:</strong> We use Google Tag Manager and Google Ads conversion tracking solely to measure booking performance and improve our service.</li>
+                      <li><strong>Data Access &amp; Deletion:</strong> Request a copy or permanent deletion of your data anytime at{' '}
+                        <a href="mailto:booking@tidyupscleaning.com" className="text-sky-400 underline font-bold">booking@tidyupscleaning.com</a>{' '}
+                        or via our{' '}
+                        <a href="/privacy" className="text-emerald-400 underline font-bold">full Privacy Policy page</a>.
+                      </li>
+                    </ul>
+                  </div>
+                )}
+
+                {activeLegalModal === 'CONTACT' && (
+                  <div className="space-y-4">
+                    <h3 className="text-lg sm:text-xl font-black text-white">
+                      Contact TidyUps Cleaning Service Inc.
+                    </h3>
+                    <p>
+                      Have a question about your move-out, basic, or deep clean? Reach our Edmonton dispatch &amp; booking team directly by phone or email:
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <a
+                        href="tel:+18338439877"
+                        className="p-4 rounded-2xl bg-slate-900 border border-emerald-500/40 hover:border-emerald-400 transition-all space-y-1 block"
+                      >
+                        <div className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">Toll-Free Booking Line</div>
+                        <div className="text-base font-mono font-black text-white flex items-center gap-2">
+                          <Phone className="w-4 h-4 text-emerald-400" />
+                          <span>833-843-9877</span>
+                        </div>
+                      </a>
+                      <a
+                        href="tel:+15877422500"
+                        className="p-4 rounded-2xl bg-slate-900 border border-sky-500/40 hover:border-sky-400 transition-all space-y-1 block"
+                      >
+                        <div className="text-[11px] font-bold text-sky-400 uppercase tracking-wider">Edmonton Local Line</div>
+                        <div className="text-base font-mono font-black text-white flex items-center gap-2">
+                          <Phone className="w-4 h-4 text-sky-400" />
+                          <span>587-742-2500</span>
+                        </div>
+                      </a>
+                      <a
+                        href="mailto:booking@tidyupscleaning.com"
+                        className="p-4 rounded-2xl bg-slate-900 border border-slate-700 hover:border-sky-400 transition-all space-y-1 block"
+                      >
+                        <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Email Booking Desk</div>
+                        <div className="text-sm font-mono font-bold text-sky-300 flex items-center gap-2">
+                          <Mail className="w-4 h-4 text-sky-400" />
+                          <span>booking@tidyupscleaning.com</span>
+                        </div>
+                      </a>
+                      <div className="p-4 rounded-2xl bg-slate-900 border border-slate-700 space-y-1">
+                        <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Edmonton Office &amp; Hours</div>
+                        <div className="text-xs font-bold text-white flex items-start gap-2">
+                          <MapPin className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
+                          <span>8306 Chappelle Way SW, Edmonton, AB T6W 4L3 • Mon–Sun 8:00 AM – 8:00 PM MST</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {activeLegalModal === 'SUPPORT' && (
+                  <div className="space-y-4">
+                    <h3 className="text-lg sm:text-xl font-black text-white">
+                      Customer Support &amp; Frequently Asked Questions
+                    </h3>
+                    <div className="space-y-3">
+                      <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800">
+                        <h4 className="font-black text-white text-sm">Need to reschedule, update, or check on your booking?</h4>
+                        <p className="mt-1 text-slate-300">
+                          Call us toll-free at <a href="tel:+18338439877" className="text-emerald-400 font-mono font-bold underline">833-843-9877</a>, local Edmonton at <a href="tel:+15877422500" className="text-sky-400 font-mono font-bold underline">587-742-2500</a>, or email <a href="mailto:booking@tidyupscleaning.com" className="text-sky-400 font-bold underline">booking@tidyupscleaning.com</a>.
+                        </p>
+                      </div>
+                      <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800">
+                        <h4 className="font-black text-white text-sm">What is included with every cleaning appointment?</h4>
+                        <p className="mt-1 text-slate-300">
+                          All professional cleaning supplies, commercial HEPA vacuums, microfiber cloths, and eco-safe sanitizers are brought by our insured &amp; bonded team.
+                        </p>
+                      </div>
+                      <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800">
+                        <h4 className="font-black text-white text-sm">24-Hour Clean Guarantee</h4>
+                        <p className="mt-1 text-slate-300">
+                          If anything on your cleaning checklist was missed, notify our support desk within 24 hours of service completion and we will return to re-clean those areas at no additional charge.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {activeLegalModal === 'TERMS' && (
+                  <div className="space-y-4">
+                    <h3 className="text-lg sm:text-xl font-black text-white">
+                      Terms of Service — TidyUps Cleaning Service Inc.
+                    </h3>
+                    <p>
+                      By booking a cleaning service through <strong>app.tidyupscleaning.com/booking</strong> or by phone with TidyUps Cleaning Service Inc., you agree to the following service terms:
+                    </p>
+                    <ul className="list-disc list-inside space-y-2 text-slate-300">
+                      <li><strong>Basic Cleaning:</strong> Scheduled with 1 professional cleaner at $52.50/hr (plus GST).</li>
+                      <li><strong>Move-Out Cleaning:</strong> Minimum 3 hours with 2 cleaners ($105.00/hr = $315.00 minimum) or 6 hours minimum with 1 cleaner ($52.50/hr = $315.00 minimum), plus GST. Property must be empty of furniture/personal belongings for full turnover scope.</li>
+                      <li><strong>Deep Cleaning:</strong> Minimum 2 cleaners for 2 hours ($105.00/hr = $210.00 minimum), plus GST.</li>
+                      <li><strong>Estimates &amp; Extra Time:</strong> Online quotes are based on the bedroom/bathroom count and condition provided. If a home requires additional time, we notify you before proceeding.</li>
+                      <li><strong>Cancellations &amp; Rescheduling:</strong> Please provide at least 24 hours notice to reschedule or cancel without a late-cancellation fee.</li>
+                      <li><strong>24-Hour Clean Guarantee:</strong> Report any missed checklist items within 24 hours and we will promptly return to re-clean them free of charge.</li>
+                      <li><strong>Access &amp; Safety:</strong> Clients agree to provide safe property access, working electricity, and running water at the scheduled arrival window.</li>
+                    </ul>
+                  </div>
+                )}
+
+                <div className="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <a
+                    href={
+                      activeLegalModal === 'PRIVACY'
+                        ? '/privacy'
+                        : activeLegalModal === 'CONTACT'
+                        ? '/contact'
+                        : activeLegalModal === 'SUPPORT'
+                        ? '/support'
+                        : '/terms'
+                    }
+                    className="text-sky-400 hover:text-sky-300 underline font-bold inline-flex items-center gap-1"
+                  >
+                    <span>Open Full Standalone Page</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => setActiveLegalModal(null)}
+                    className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-black cursor-pointer"
+                  >
+                    Return to Booking Form
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
